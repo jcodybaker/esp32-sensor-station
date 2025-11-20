@@ -23,10 +23,45 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "settings.h"
+#include "http_server.h"
 
 static const char *TAG = "settings";
 
-esp_err_t settings_init(settings_t *settings)
+static const char *settings_get_html = ""
+    "<!DOCTYPE html>"
+    "<html>"
+    "<head><title>Settings</title></head>"
+    "<body>"
+    "<h1>Settings</h1>"
+    "</body>"
+    "</html>";
+
+static esp_err_t settings_get_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "keep-alive");
+    httpd_resp_send(req, settings_get_html, strlen(settings_get_html));
+    return ESP_OK;
+}
+
+
+static esp_err_t settings_post_handler(httpd_req_t *req) {
+    return ESP_OK;
+}
+
+static httpd_uri_t settings_post_uri = {
+    .uri       = "/settings",
+    .method    = HTTP_POST,
+    .handler   = settings_post_handler,
+};
+
+static httpd_uri_t settings_get_uri = {
+    .uri       = "/settings",
+    .method    = HTTP_GET,
+    .handler   = settings_get_handler,
+};
+
+esp_err_t settings_init(settings_t *settings, httpd_handle_t http_server)
 {
     settings->update_url = NULL;
     settings->password = NULL;
@@ -83,6 +118,7 @@ esp_err_t settings_init(settings_t *settings)
             break;
         case ESP_ERR_NVS_NOT_FOUND:
             settings->password = CONFIG_HTTPD_BASIC_AUTH_PASSWORD;
+            ESP_LOGI(TAG, "Setting 'password' on settings %p", settings);
             ESP_LOGI(TAG, "No value for 'password'; using default = %s", settings->password);
             break;
         default:
@@ -135,6 +171,17 @@ esp_err_t settings_init(settings_t *settings)
         default:
             ESP_LOGE(TAG, "Error (%s) reading weight_gain!", esp_err_to_name(err));
             return err;
+    }
+
+    err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_post_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering settings POST handler!", esp_err_to_name(err));
+        return err;
+    }
+    err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_get_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering settings GET handler!", esp_err_to_name(err));
+        return err;
     }
     return ESP_OK;
 }

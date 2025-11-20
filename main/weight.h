@@ -1,6 +1,8 @@
 #ifndef WEIGHT_H
 #define WEIGHT_H
 
-void weight_init();
+#include "settings.h"
+
+void weight_init(settings_t *settings);
 
 #endif // WEIGHT_H

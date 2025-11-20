@@ -12,7 +12,7 @@ static const char *TAG = "hx711";
 
 static void weight(void *pvParameters)
 {
-    settings_t settings = *(settings_t *)pvParameters;
+    settings_t *settings = (settings_t *)pvParameters;
     hx711_t dev =
     {
         .dout = CONFIG_WEIGHT_DOUT_GPIO,

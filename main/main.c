@@ -12,6 +12,8 @@
 #include "ota.h"
 #include "esp_event.h"
 #include "settings.h"
+#include "http_server.h"
+#include <esp_log.h>
 
 void app_main(void)
 {
@@ -25,10 +27,12 @@ void app_main(void)
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    settings_t settings;
-    ESP_ERROR_CHECK(settings_init(&settings));
-
     wifi_init_sta();
-    weight_init();
-    ota_init();
+    settings_t *settings = malloc(sizeof(settings_t));
+    ESP_LOGI("main", "app_main settings ptr %p", settings);
+
+    httpd_handle_t http_server = http_server_init();
+    ESP_ERROR_CHECK(settings_init(settings, http_server));
+    weight_init(settings);
+    // ota_init();
 }

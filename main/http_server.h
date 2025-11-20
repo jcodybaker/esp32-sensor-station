@@ -5,6 +5,6 @@
 
 httpd_handle_t http_server_init();
 
-void httpd_register_basic_auth(httpd_handle_t server);
+esp_err_t httpd_register_uri_handler_with_basic_auth(settings_t *settings, httpd_handle_t handle, httpd_uri_t *uri_handler);
 
 #endif // HTTP_SERVER_H

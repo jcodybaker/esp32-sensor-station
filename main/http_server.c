@@ -6,6 +6,7 @@
 #include "esp_check.h"
 #include "esp_tls_crypto.h"
 #include "esp_tls.h"
+#include "settings.h"
 
 
 // Shamelessly borrowed from https://github.com/espressif/esp-idf/blob/v5.5.1/examples/protocols/http_server/simple/main/main.c
@@ -13,9 +14,10 @@
 static const char *TAG = "httpd";
 
 typedef struct {
-    char    *username;
-    char    *password;
-} basic_auth_info_t;
+    settings_t *settings;
+    esp_err_t (*handler)(httpd_req_t *r);
+    void *user_ctx;
+} basic_auth_wrap_t;
 
 #define HTTPD_401      "401 UNAUTHORIZED"           /*!< HTTP Response 401 */
 
@@ -55,7 +57,8 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
 {
     char *buf = NULL;
     size_t buf_len = 0;
-    basic_auth_info_t *basic_auth_info = req->user_ctx;
+    basic_auth_wrap_t *wrapper = req->user_ctx;
+    ESP_LOGI(TAG, "basic_auth_get_handler settings ptr %p", wrapper->settings);
 
     buf_len = httpd_req_get_hdr_value_len(req, "Authorization") + 1;
     if (buf_len > 1) {
@@ -71,7 +74,10 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
             ESP_LOGE(TAG, "No auth value received");
         }
 
-        char *auth_credentials = http_auth_basic(basic_auth_info->username, basic_auth_info->password);
+        char *auth_credentials = http_auth_basic(wrapper->settings->password, wrapper->settings->password);
+        ESP_LOGI(TAG, "Expected Authorization: %s", auth_credentials);
+        ESP_LOGI(TAG, "Received Authorization: %s", buf);
+        ESP_LOGI(TAG, "password: %s", wrapper->settings->password);
         if (!auth_credentials) {
             ESP_LOGE(TAG, "No enough memory for basic authorization credentials");
             free(buf);
@@ -81,61 +87,53 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
         if (strncmp(auth_credentials, buf, buf_len)) {
             ESP_LOGE(TAG, "Not authenticated");
             httpd_resp_set_status(req, HTTPD_401);
-            httpd_resp_set_type(req, "application/json");
             httpd_resp_set_hdr(req, "Connection", "keep-alive");
-            httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Hello\"");
+            httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Weight\"");
             httpd_resp_send(req, NULL, 0);
         } else {
             ESP_LOGI(TAG, "Authenticated!");
-            char *basic_auth_resp = NULL;
-            httpd_resp_set_status(req, HTTPD_200);
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Connection", "keep-alive");
-            int rc = asprintf(&basic_auth_resp, "{\"authenticated\": true,\"user\": \"%s\"}", basic_auth_info->username);
-            if (rc < 0) {
-                ESP_LOGE(TAG, "asprintf() returned: %d", rc);
-                free(auth_credentials);
-                return ESP_FAIL;
-            }
-            if (!basic_auth_resp) {
-                ESP_LOGE(TAG, "No enough memory for basic authorization response");
-                free(auth_credentials);
-                free(buf);
-                return ESP_ERR_NO_MEM;
-            }
-            httpd_resp_send(req, basic_auth_resp, strlen(basic_auth_resp));
-            free(basic_auth_resp);
+            req->user_ctx = wrapper->user_ctx;
+            free(auth_credentials);
+            free(buf);
+            return wrapper->handler(req);
         }
         free(auth_credentials);
         free(buf);
     } else {
         ESP_LOGE(TAG, "No auth header received");
         httpd_resp_set_status(req, HTTPD_401);
-        httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Connection", "keep-alive");
-        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Hello\"");
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Weight\"");
         httpd_resp_send(req, NULL, 0);
     }
 
     return ESP_OK;
 }
 
-static httpd_uri_t basic_auth = {
-    .uri       = "/basic_auth",
-    .method    = HTTP_GET,
-    .handler   = basic_auth_get_handler,
-};
-
-void httpd_register_basic_auth(httpd_handle_t server)
+esp_err_t httpd_register_uri_handler_with_basic_auth(settings_t *settings, httpd_handle_t server, httpd_uri_t *uri_handler)
 {
-    basic_auth_info_t *basic_auth_info = calloc(1, sizeof(basic_auth_info_t));
-    if (basic_auth_info) {
-        basic_auth_info->username = CONFIG_HTTPD_BASIC_AUTH_USERNAME;
-        basic_auth_info->password = CONFIG_HTTPD_BASIC_AUTH_PASSWORD;
-
-        basic_auth.user_ctx = basic_auth_info;
-        httpd_register_uri_handler(server, &basic_auth);
+    ESP_LOGI(TAG, "httpd_register_uri_handler_with_basic_auth settings ptr %p", settings);
+    basic_auth_wrap_t *wrapper = malloc(sizeof(basic_auth_wrap_t));
+    if (!wrapper) {
+        ESP_LOGE(TAG, "No enough memory for basic auth wrapper");
+        return ESP_ERR_NO_MEM;
     }
+    memset(wrapper, 0, sizeof(basic_auth_wrap_t));
+    wrapper->handler = uri_handler->handler;
+    wrapper->user_ctx = uri_handler->user_ctx;
+    wrapper->settings = settings;
+
+    httpd_uri_t *wrapped_uri_handler = malloc(sizeof(httpd_uri_t));
+    if (!wrapped_uri_handler) {
+        ESP_LOGE(TAG, "No enough memory for wrapped URI handler");
+        free(wrapper);
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(wrapped_uri_handler, uri_handler, sizeof(httpd_uri_t));
+    wrapped_uri_handler->user_ctx = wrapper;
+    wrapped_uri_handler->handler = basic_auth_get_handler;
+
+    return httpd_register_uri_handler(server, wrapped_uri_handler);
 }
 
 httpd_handle_t http_server_init(void)
