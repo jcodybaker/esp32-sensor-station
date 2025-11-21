@@ -47,7 +47,7 @@ static void weight(void *pvParameters)
     }
 }
 
-void weight_init(settings_t *settings)
+void weight_init(settings_t *settings, httpd_handle_t server)
 {
     xTaskCreate(weight, "weight", configMINIMAL_STACK_SIZE * 5, settings, 5, NULL);
 }

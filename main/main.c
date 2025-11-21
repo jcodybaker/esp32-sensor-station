@@ -33,6 +33,6 @@ void app_main(void)
 
     httpd_handle_t http_server = http_server_init();
     ESP_ERROR_CHECK(settings_init(settings, http_server));
-    weight_init(settings);
+    weight_init(settings, http_server);
     // ota_init();
 }
