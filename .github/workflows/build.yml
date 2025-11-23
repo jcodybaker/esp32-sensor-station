@@ -17,30 +17,30 @@ jobs:
       with:
         submodules: 'recursive'
     
-    - name: Setup ESP-IDF
+    - name: Configure WiFi Credentials
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v5.5.1
         target: esp32
+        command: |
+          cp sdkconfig.github sdkconfig
+          # Set WiFi SSID and Password from GitHub secrets
+          if [ -n "${{ secrets.WIFI_SSID }}" ]; then
+            echo "Configuring WiFi SSID from secrets"
+            sed -i 's/CONFIG_ESP_WIFI_SSID=".*"/CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}"/' sdkconfig.defaults
+            idf.py set-target esp32
+            idf.py menuconfig --non-interactive \
+              -D CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}" \
+              -D CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"
+          else
+            echo "Warning: WIFI_SSID secret not set, using default values"
+          fi
     
-    # - name: Configure WiFi credentials
-    #   run: |
-    #     # Set WiFi SSID and Password from GitHub secrets
-    #     if [ -n "${{ secrets.WIFI_SSID }}" ]; then
-    #       echo "Configuring WiFi SSID from secrets"
-    #       sed -i 's/CONFIG_ESP_WIFI_SSID=".*"/CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}"/' sdkconfig.defaults || true
-    #       idf.py set-target esp32
-    #       idf.py menuconfig --non-interactive \
-    #         -D CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}" \
-    #         -D CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"
-    #     else
-    #       echo "Warning: WIFI_SSID secret not set, using default values"
-    #     fi
-    
-    - name: Build project
-      run: |
-        . $IDF_PATH/export.sh
-        idf.py build
+    - name: Configure WiFi Credentials
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.5.1
+        target: esp32
     
     - name: Get project version
       id: version
@@ -52,97 +52,12 @@ jobs:
     - name: Prepare artifacts
       run: |
         mkdir -p artifacts
-        cp build/weight.bin artifacts/ || true
-        cp build/bootloader/bootloader.bin artifacts/ || true
-        cp build/partition_table/partition-table.bin artifacts/ || true
-        cp build/flash_project_args artifacts/ || true
-        cp build/flasher_args.json artifacts/ || true
-        
-        # Create a flash command helper script
-        cat > artifacts/flash.sh << 'EOF'
-        #!/bin/bash
-        # Flash script for ESP32 Weight Station
-        # Usage: ./flash.sh [PORT]
-        # Example: ./flash.sh /dev/ttyUSB0
-        
-        PORT=${1:-/dev/ttyUSB0}
-        
-        if [ ! -f "weight.bin" ]; then
-          echo "Error: weight.bin not found in current directory"
-          exit 1
-        fi
-        
-        echo "Flashing to $PORT..."
-        
-        # Read flash args from flasher_args.json if available
-        if command -v esptool.py &> /dev/null; then
-          esptool.py --chip esp32 --port $PORT --baud 460800 \
-            --before default_reset --after hard_reset write_flash \
-            -z --flash_mode dio --flash_freq 40m --flash_size detect \
-            0x1000 bootloader.bin \
-            0x8000 partition-table.bin \
-            0x10000 weight.bin
-        else
-          echo "Error: esptool.py not found. Please install esp-idf or esptool"
-          exit 1
-        fi
-        
-        echo "Flash complete!"
-        EOF
-        chmod +x artifacts/flash.sh
-        
-        # Create a README for the artifacts
-        cat > artifacts/README.md << EOF
-        # ESP32 Weight Station Build Artifacts
-        
-        **Version:** ${{ steps.version.outputs.version }}
-        **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-        **Commit:** ${{ github.sha }}
-        
-        ## Files
-        
-        - \`weight.bin\` - Main application binary
-        - \`bootloader.bin\` - Bootloader binary
-        - \`partition-table.bin\` - Partition table
-        - \`flasher_args.json\` - Flash configuration (JSON)
-        - \`flash_project_args\` - Flash arguments
-        - \`flash.sh\` - Helper script to flash the device
-        
-        ## Flashing Instructions
-        
-        ### Using the helper script (Linux/Mac):
-        \`\`\`bash
-        chmod +x flash.sh
-        ./flash.sh /dev/ttyUSB0
-        \`\`\`
-        
-        ### Manual flashing:
-        \`\`\`bash
-        esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 \\
-          --before default_reset --after hard_reset write_flash \\
-          -z --flash_mode dio --flash_freq 40m --flash_size detect \\
-          0x1000 bootloader.bin \\
-          0x8000 partition-table.bin \\
-          0x10000 weight.bin
-        \`\`\`
-        
-        ### Windows:
-        \`\`\`cmd
-        esptool.py --chip esp32 --port COM3 --baud 460800 ^
-          --before default_reset --after hard_reset write_flash ^
-          -z --flash_mode dio --flash_freq 40m --flash_size detect ^
-          0x1000 bootloader.bin ^
-          0x8000 partition-table.bin ^
-          0x10000 weight.bin
-        \`\`\`
-        
-        ## Notes
-        
-        - The default serial port is /dev/ttyUSB0 (Linux) or COM3 (Windows)
-        - Adjust the port parameter to match your system
-        - Make sure you have appropriate permissions to access the serial port
-        EOF
-    
+        cp build/weight.bin artifacts/
+        cp build/bootloader/bootloader.bin artifacts/
+        cp build/partition_table/partition-table.bin artifacts/
+        cp build/flash_project_args artifacts/
+        cp build/flasher_args.json artifacts/
+ 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
