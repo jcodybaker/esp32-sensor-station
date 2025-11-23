@@ -23,7 +23,7 @@ jobs:
         esp_idf_version: v5.5.1
         target: esp32
         command: |
-          cp sdkconfig.github sdkconfig
+          cp sdkconfig.github sdkconfig.defaults
           # Set WiFi SSID and Password from GitHub secrets
           if [ -n "${{ secrets.WIFI_SSID }}" ]; then
             echo "Configuring WiFi SSID from secrets"
@@ -36,7 +36,7 @@ jobs:
             echo "Warning: WIFI_SSID secret not set, using default values"
           fi
     
-    - name: Configure WiFi Credentials
+    - name: Build
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v5.5.1
