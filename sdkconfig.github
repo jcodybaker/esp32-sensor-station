@@ -456,7 +456,7 @@ CONFIG_ESP_WIFI_AUTH_WPA2_PSK=y
 # CONFIG_ESP_WIFI_AUTH_WPA3_PSK is not set
 # CONFIG_ESP_WIFI_AUTH_WPA2_WPA3_PSK is not set
 # CONFIG_ESP_WIFI_AUTH_WAPI_PSK is not set
-CONFIG_OTA_FIRMWARE_UPGRADE_URL="https://github.com/jcodybaker/esp32-weight/releases/download/v0.0.3/weight.bin"
+CONFIG_OTA_FIRMWARE_UPGRADE_URL="https://github.com/jcodybaker/esp32-weight/releases/latest/download/weight.bin"
 CONFIG_HTTPD_BASIC_AUTH_USERNAME="admin"
 CONFIG_HTTPD_BASIC_AUTH_PASSWORD="admin"
 # end of Weight Sensor Configuration
