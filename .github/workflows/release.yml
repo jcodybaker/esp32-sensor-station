@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        fetch-depth: 0
+    
+    - name: Get tag version
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Release version: $VERSION"
+    
+    - name: Configure WiFi Credentials
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.5.1
+        target: esp32
+        command: |
+          cp sdkconfig.github sdkconfig.defaults
+          # Set WiFi SSID and Password from GitHub secrets
+          if [ -n "${{ secrets.WIFI_SSID }}" ]; then
+            echo "Configuring WiFi SSID from secrets"
+            sed -i 's/CONFIG_ESP_WIFI_SSID=".*"/CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}"/' sdkconfig.defaults
+            sed -i 's/CONFIG_ESP_WIFI_PASSWORD=".*"/CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"/' sdkconfig.defaults
+            idf.py set-target esp32
+            idf.py reconfigure \
+              -D CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}" \
+              -D CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"
+          else
+            echo "Warning: WIFI_SSID secret not set, using default values"
+          fi
+    
+    - name: Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.5.1
+        target: esp32
+    
+    - name: Prepare release artifacts
+      run: |
+        mkdir -p release
+        cp build/weight.bin release/
+        cp build/bootloader/bootloader.bin release/
+        cp build/partition_table/partition-table.bin release/
+        cp build/flash_project_args release/
+        cp build/flasher_args.json release/
+        
+        # Create a flash instructions file
+        cat > release/FLASH_INSTRUCTIONS.txt << 'EOF'
+        ESP32 Weight Station Flashing Instructions
+        ===========================================
+        
+        Method 1: Using esptool.py
+        ---------------------------
+        Install esptool: pip install esptool
+        
+        Flash command:
+        esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
+          --before default_reset --after hard_reset write_flash \
+          --flash_mode dio --flash_freq 40m --flash_size detect \
+          0x1000 bootloader.bin \
+          0x8000 partition-table.bin \
+          0x10000 weight.bin
+        
+        Note: Replace /dev/ttyUSB0 with your actual serial port (e.g., COM3 on Windows)
+        
+        Method 2: Using flasher_args.json
+        ----------------------------------
+        The flasher_args.json file contains the complete flashing configuration
+        and can be used with ESP-IDF's flash tools.
+        
+        EOF
+        
+        # Create checksums
+        cd release
+        sha256sum *.bin > checksums.txt
+        cd ..
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          release/weight.bin
+          release/bootloader.bin
+          release/partition-table.bin
+          release/flash_project_args
+          release/flasher_args.json
+          release/FLASH_INSTRUCTIONS.txt
+          release/checksums.txt
+        body: |
+          ## ESP32 Weight Station ${{ steps.version.outputs.version }}
+          
+          ### Build Information
+          - **Target:** ESP32
+          - **ESP-IDF Version:** v5.5.1
+          - **Build Date:** ${{ github.event.head_commit.timestamp }}
+          
+          ### Installation
+          Download the artifacts and follow the instructions in `FLASH_INSTRUCTIONS.txt` to flash your ESP32 device.
+          
+          ### Files Included
+          - `weight.bin` - Main application binary
+          - `bootloader.bin` - Bootloader binary
+          - `partition-table.bin` - Partition table binary
+          - `flasher_args.json` - Complete flashing configuration
+          - `flash_project_args` - Flash arguments for the project
+          - `FLASH_INSTRUCTIONS.txt` - Detailed flashing instructions
+          - `checksums.txt` - SHA256 checksums for verification
+          
+          ### Changes
+          See the commit history for details on what's included in this release.
+        draft: false
+        prerelease: false
+        fail_on_unmatched_files: true
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
