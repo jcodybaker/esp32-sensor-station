@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 #include <hx711.h>
 #include <string.h>
+#include "IQmathLib.h"
 
 #include "weight.h"
 #include "settings.h"
@@ -13,12 +14,13 @@
 static const char *TAG = "hx711";
 
 // Global variable to store the latest weight reading
-static int32_t g_latest_weight = 0;
+static int32_t g_latest_weight_raw = 0;
+static _iq8 g_latest_weight_grams = 0;
 static bool g_weight_available = false;
 
 static void weight(void *pvParameters)
 {
-    // settings_t *settings = (settings_t *)pvParameters;
+    settings_t *settings = (settings_t *)pvParameters;
     hx711_t dev =
     {
         .dout = CONFIG_WEIGHT_DOUT_GPIO,
@@ -50,7 +52,10 @@ static void weight(void *pvParameters)
         ESP_LOGI(TAG, "Raw data: %" PRIi32, data);
 
         // Store the latest weight reading
-        g_latest_weight = data;
+        g_latest_weight_raw = data;
+        // Convert raw int32_t to _iq8, multiply by scale (_iq8), subtract tare
+        _iq8 data_iq8 = _IQ8(data);
+        g_latest_weight_grams = _IQ8mpy(data_iq8, settings->weight_scale) - _IQ8(settings->weight_tare);
         g_weight_available = true;
 
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -124,7 +129,8 @@ static esp_err_t weight_data_handler(httpd_req_t *req) {
     
     if (g_weight_available) {
         snprintf(json_buf, sizeof(json_buf), 
-                "{\"available\":true,\"weight\":%" PRIi32 "}", g_latest_weight);
+                "{\"available\":true,\"weight\":%.2f,\"raw\":%" PRIi32 "}", 
+                _IQ8toF(g_latest_weight_grams), g_latest_weight_raw);
     } else {
         snprintf(json_buf, sizeof(json_buf), "{\"available\":false}");
     }
@@ -150,11 +156,18 @@ static httpd_uri_t weight_data_uri = {
     .user_ctx  = NULL
 };
 
-int32_t weight_get_latest(bool *available) {
+_iq8 weight_get_latest(bool *available) {
     if (available) {
         *available = g_weight_available;
     }
-    return g_latest_weight;
+    return g_latest_weight_grams;
+}
+
+uint32_t weight_get_latest_raw(bool *available) {
+    if (available) {
+        *available = g_weight_available;
+    }
+    return g_latest_weight_raw;
 }
 
 void weight_init(settings_t *settings, httpd_handle_t server)

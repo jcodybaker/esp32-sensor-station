@@ -25,38 +25,85 @@
 #include "nvs.h"
 #include "settings.h"
 #include "http_server.h"
+#include <stdbool.h>
+#include <math.h>
+#include "IQmathLib.h"
 
 static const char *TAG = "settings";
+
+// URL encode function - encodes special characters for HTML attribute values
+// Returns allocated string that must be freed by caller
+static char *url_encode(const char *src) {
+    if (!src) return strdup("");
+    
+    // Calculate required buffer size
+    size_t len = 0;
+    for (const char *p = src; *p; p++) {
+        // Characters that need encoding in HTML attributes
+        if (*p == '"' || *p == '<' || *p == '>' || *p == '&' || *p == '\'' || 
+            *p == '%' || *p == '+' || *p == '=' || *p == '?' || *p == '#' ||
+            (*p < 32) || (*p > 126)) {
+            len += 3; // %XX
+        } else {
+            len += 1;
+        }
+    }
+    
+    char *encoded = malloc(len + 1);
+    if (!encoded) return NULL;
+    
+    char *dst = encoded;
+    for (const char *p = src; *p; p++) {
+        if (*p == '"' || *p == '<' || *p == '>' || *p == '&' || *p == '\'' || 
+            *p == '%' || *p == '+' || *p == '=' || *p == '?' || *p == '#' ||
+            (*p < 32) || (*p > 126)) {
+            sprintf(dst, "%%%02X", (unsigned char)*p);
+            dst += 3;
+        } else {
+            *dst++ = *p;
+        }
+    }
+    *dst = '\0';
+    return encoded;
+}
 
 // URL decode function - decodes %XX sequences in place
 static void url_decode(char *dst, const char *src) {
     char a, b;
-    while (*src) {
-        if ((*src == '%') &&
-            ((a = src[1]) && (b = src[2])) &&
-            (isxdigit(a) && isxdigit(b))) {
-            if (a >= 'a')
-                a -= 'a'-'A';
-            if (a >= 'A')
-                a -= ('A' - 10);
-            else
-                a -= '0';
-            if (b >= 'a')
-                b -= 'a'-'A';
-            if (b >= 'A')
-                b -= ('A' - 10);
-            else
-                b -= '0';
-            *dst++ = 16*a+b;
-            src+=3;
-        } else if (*src == '+') {
-            *dst++ = ' ';
-            src++;
+    const char *read_ptr = src;
+    char *write_ptr = dst;
+    
+    while (*read_ptr) {
+        if (*read_ptr == '%' && read_ptr[1] != '\0' && read_ptr[2] != '\0') {
+            a = read_ptr[1];
+            b = read_ptr[2];
+            if (isxdigit(a) && isxdigit(b)) {
+                if (a >= 'a')
+                    a -= 'a'-'A';
+                if (a >= 'A')
+                    a -= ('A' - 10);
+                else
+                    a -= '0';
+                if (b >= 'a')
+                    b -= 'a'-'A';
+                if (b >= 'A')
+                    b -= ('A' - 10);
+                else
+                    b -= '0';
+                *write_ptr++ = 16*a+b;
+                read_ptr += 3;
+            } else {
+                // Invalid hex sequence, just copy the %
+                *write_ptr++ = *read_ptr++;
+            }
+        } else if (*read_ptr == '+') {
+            *write_ptr++ = ' ';
+            read_ptr++;
         } else {
-            *dst++ = *src++;
+            *write_ptr++ = *read_ptr++;
         }
     }
-    *dst++ = '\0';
+    *write_ptr = '\0';
 }
 
 static esp_err_t settings_get_handler(httpd_req_t *req) {
@@ -99,12 +146,14 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     // Send update_url with current value
     char buffer[512];
+    char *encoded_update_url = url_encode(settings->update_url);
     snprintf(buffer, sizeof(buffer), 
         "<hr class='minor'/>"
         "<label for='update_url'>Update URL:</label>"
         "<input type='text' id='update_url' name='update_url' value='%s'>",
-        settings->update_url ? settings->update_url : "");
+        encoded_update_url ? encoded_update_url : "");
     httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_update_url);
     
     // Send weight_tare with current value
     snprintf(buffer, sizeof(buffer),
@@ -117,8 +166,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     // Send weight_scale with current value
     snprintf(buffer, sizeof(buffer),
         "<label for='weight_scale'>Weight Scale:</label>"
-        "<input type='number' id='weight_scale' name='weight_scale' value='%" PRId32 "'>",
-        settings->weight_scale);
+        "<input type='number' step='0.00390625' id='weight_scale' name='weight_scale' value='%.8f'>",
+        _IQ8toF(settings->weight_scale));
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send weight_gain with current value selected
@@ -135,12 +184,14 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send wifi_ssid with current value
+    char *encoded_wifi_ssid = url_encode(settings->wifi_ssid);
     snprintf(buffer, sizeof(buffer),
         "<hr class='minor'/>"
         "<label for='wifi_ssid'>Wifi SSID:</label>"
         "<input type='text' id='wifi_ssid' name='wifi_ssid' value='%s'>",
-        settings->wifi_ssid ? settings->wifi_ssid : "");
+        encoded_wifi_ssid ? encoded_wifi_ssid : "");
     httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_wifi_ssid);
     
     // Send wifi_password and checkbox
     snprintf(buffer, sizeof(buffer),
@@ -237,17 +288,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     // Buffer for parameter values
     char param_buf[256];
+    char decoded_param[256];
     
     // Check and update password
     if (httpd_query_key_value(query_buf, "password", param_buf, sizeof(param_buf)) == ESP_OK) {
-        url_decode(param_buf, param_buf);  // Decode URL encoding
-        if (strlen(param_buf) > 0) {
-            err = nvs_set_str(settings_handle, "password", param_buf);
+        url_decode(decoded_param, param_buf);  // Decode URL encoding
+        if (strcmp(decoded_param, settings->password) == 0) {
+            ESP_LOGI(TAG, "Password unchanged");
+            decoded_param[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(decoded_param) > 0) {
+            err = nvs_set_str(settings_handle, "password", decoded_param);
             if (err == ESP_OK) {
-                if (settings->password != NULL && (strcmp(settings->password, CONFIG_HTTPD_BASIC_AUTH_PASSWORD) != 0)) {
+                if (settings->password != NULL) {
                     free(settings->password);
                 }
-                settings->password = strdup(param_buf);
+                settings->password = strdup(decoded_param);
                 updated = true;
                 ESP_LOGI(TAG, "Updated password");
             } else {
@@ -258,16 +314,20 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     // Check and update update_url
     if (httpd_query_key_value(query_buf, "update_url", param_buf, sizeof(param_buf)) == ESP_OK) {
-        url_decode(param_buf, param_buf);  // Decode URL encoding
-        if (strlen(param_buf) > 0) {
-            err = nvs_set_str(settings_handle, "update_url", param_buf);
+        url_decode(decoded_param, param_buf);  // Decode URL encoding
+        if (strcmp(decoded_param, settings->update_url) == 0) {
+            ESP_LOGI(TAG, "Update URL unchanged");
+            decoded_param[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(decoded_param) > 0) {
+            err = nvs_set_str(settings_handle, "update_url", decoded_param);
             if (err == ESP_OK) {
-                if (settings->update_url != NULL && (strcmp(settings->update_url, CONFIG_OTA_FIRMWARE_UPGRADE_URL) != 0)) {
+                if (settings->update_url != NULL) {
                     free(settings->update_url);
                 }
-                settings->update_url = strdup(param_buf);
+                settings->update_url = strdup(decoded_param);
                 updated = true;
-                ESP_LOGI(TAG, "Updated update_url to %s", param_buf);
+                ESP_LOGI(TAG, "Updated update_url to %s", decoded_param);
             } else {
                 ESP_LOGE(TAG, "Failed to write update_url to NVS: %s", esp_err_to_name(err));
             }
@@ -276,8 +336,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     // Check and update weight_tare
     if (httpd_query_key_value(query_buf, "weight_tare", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int32_t weight_tare = atoi(param_buf);
+        if (weight_tare == settings->weight_tare) {
+            ESP_LOGI(TAG, "Weight tare unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
         if (strlen(param_buf) > 0) {
-            int32_t weight_tare = atoi(param_buf);
             err = nvs_set_i32(settings_handle, "weight_tare", weight_tare);
             if (err == ESP_OK) {
                 settings->weight_tare = weight_tare;
@@ -291,13 +355,18 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     // Check and update weight_scale
     if (httpd_query_key_value(query_buf, "weight_scale", param_buf, sizeof(param_buf)) == ESP_OK) {
+        float weight_scale_f = atof(param_buf);
+        _iq8 weight_scale = _IQ8(weight_scale_f);
+        if (weight_scale == settings->weight_scale) {
+            ESP_LOGI(TAG, "Weight scale unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
         if (strlen(param_buf) > 0) {
-            int32_t weight_scale = atoi(param_buf);
             err = nvs_set_i32(settings_handle, "weight_scale", weight_scale);
             if (err == ESP_OK) {
                 settings->weight_scale = weight_scale;
                 updated = true;
-                ESP_LOGI(TAG, "Updated weight_scale to %d", weight_scale);
+                ESP_LOGI(TAG, "Updated weight_scale to %.8f (0x%08" PRIX32 ")", _IQ8toF(weight_scale), weight_scale);
             } else {
                 ESP_LOGE(TAG, "Failed to write weight_scale to NVS: %s", esp_err_to_name(err));
             }
@@ -306,8 +375,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     // Check and update weight_gain
     if (httpd_query_key_value(query_buf, "weight_gain", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int32_t weight_gain = atoi(param_buf);
+        if (weight_gain == settings->weight_gain) {
+            ESP_LOGI(TAG, "Weight gain unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
         if (strlen(param_buf) > 0) {
-            int32_t weight_gain = atoi(param_buf);
             err = nvs_set_i32(settings_handle, "weight_gain", weight_gain);
             if (err == ESP_OK) {
                 settings->weight_gain = (hx711_gain_t)weight_gain;
@@ -320,14 +393,18 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     }
 
     if (httpd_query_key_value(query_buf, "wifi_ssid", param_buf, sizeof(param_buf)) == ESP_OK) {
-        url_decode(param_buf, param_buf);  // Decode URL encoding
-        if (strlen(param_buf) > 0) {
-            err = nvs_set_str(settings_handle, "wifi_ssid", param_buf);
+        url_decode(decoded_param, param_buf);  // Decode URL encoding
+        if (strcmp(decoded_param, settings->wifi_ssid) == 0) {
+            ESP_LOGI(TAG, "WiFi ssid unchanged");
+            decoded_param[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(decoded_param) > 0) {
+            err = nvs_set_str(settings_handle, "wifi_ssid", decoded_param);
             if (err == ESP_OK) {
-                if (settings->wifi_ssid != NULL && (strcmp(settings->wifi_ssid, CONFIG_ESP_WIFI_SSID) != 0)) {
+                if (settings->wifi_ssid != NULL) {
                     free(settings->wifi_ssid);
                 }
-                settings->wifi_ssid = strdup(param_buf);
+                settings->wifi_ssid = strdup(decoded_param);
                 updated = true;
                 ESP_LOGI(TAG, "Updated ssid");  
                 restart_needed = true;
@@ -338,14 +415,18 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     }
 
     if (httpd_query_key_value(query_buf, "wifi_password", param_buf, sizeof(param_buf)) == ESP_OK) {
-        url_decode(param_buf, param_buf);  // Decode URL encoding
-        if (strlen(param_buf) > 0) {
-            err = nvs_set_str(settings_handle, "wifi_password", param_buf);
+        url_decode(decoded_param, param_buf);  // Decode URL encoding
+        if (strcmp(decoded_param, settings->wifi_password) == 0) {
+            ESP_LOGI(TAG, "WiFi password unchanged");
+            decoded_param[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(decoded_param) > 0) {
+            err = nvs_set_str(settings_handle, "wifi_password", decoded_param);
             if (err == ESP_OK) {
-                if (settings->wifi_password != NULL && (strcmp(settings->wifi_password, CONFIG_ESP_WIFI_PASSWORD) != 0)) {
+                if (settings->wifi_password != NULL) {
                     free(settings->wifi_password);
                 }
-                settings->wifi_password = strdup(param_buf);
+                settings->wifi_password = strdup(decoded_param);
                 updated = true;
                 ESP_LOGI(TAG, "Updated wifi_password");
                 restart_needed = true;
@@ -360,14 +441,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     if (httpd_query_key_value(query_buf, "wifi_ap_fallback_disable", param_buf, sizeof(param_buf)) == ESP_OK) {
         wifi_ap_fallback_disable = true;
     }
-    err = nvs_set_u8(settings_handle, "wifi_ap_fb_dis", wifi_ap_fallback_disable ? 1 : 0);
-    if (err == ESP_OK) {
-        settings->wifi_ap_fallback_disable = wifi_ap_fallback_disable;
-        updated = true;
-        ESP_LOGI(TAG, "Updated wifi_ap_fallback_disable to %d", wifi_ap_fallback_disable);
+    if (wifi_ap_fallback_disable != settings->wifi_ap_fallback_disable) {
+        err = nvs_set_u8(settings_handle, "wifi_ap_fb_dis", wifi_ap_fallback_disable ? 1 : 0);
+        if (err == ESP_OK) {
+            settings->wifi_ap_fallback_disable = wifi_ap_fallback_disable;
+            updated = true;
+            ESP_LOGI(TAG, "Updated wifi_ap_fallback_disable to %d", wifi_ap_fallback_disable);
+        } else {
+            ESP_LOGE(TAG, "Failed to write wifi_ap_fallback_disable to NVS: %s", esp_err_to_name(err));
+        }
     } else {
-        ESP_LOGE(TAG, "Failed to write wifi_ap_fallback_disable to NVS: %s", esp_err_to_name(err));
+        ESP_LOGI(TAG, "WiFi AP fallback disable unchanged");
     }
+    
     
     // Commit changes to NVS
     if (updated) {
@@ -441,7 +527,7 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'update_url' = '%s'", settings->update_url);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->update_url = CONFIG_OTA_FIRMWARE_UPGRADE_URL;
+            settings->update_url = strdup(CONFIG_OTA_FIRMWARE_UPGRADE_URL);
             ESP_LOGI(TAG, "No value for 'update_url'; using default = '%s'", settings->update_url);
             break;
         default:
@@ -490,14 +576,16 @@ esp_err_t settings_init(settings_t *settings)
     }
     
     ESP_LOGI(TAG, "\nReading 'weight_scale' from NVS...");
-    err = nvs_get_i32(settings_handle, "weight_scale", &settings->weight_scale);
+    int32_t weight_scale_raw;
+    err = nvs_get_i32(settings_handle, "weight_scale", &weight_scale_raw);
     switch (err) {
         case ESP_OK:
-            ESP_LOGI(TAG, "Read 'weight_scale' = %d", settings->weight_scale);
+            settings->weight_scale = (_iq8)weight_scale_raw;
+            ESP_LOGI(TAG, "Read 'weight_scale' = %.8f (0x%08" PRIX32 ")", _IQ8toF(settings->weight_scale), weight_scale_raw);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->weight_scale = CONFIG_WEIGHT_SCALE;
-            ESP_LOGI(TAG, "No value for 'weight_scale'; using default = %d", settings->weight_scale);
+            settings->weight_scale = (_iq8)CONFIG_WEIGHT_SCALE;
+            ESP_LOGI(TAG, "No value for 'weight_scale'; using default = %.8f (0x%08" PRIX32 ")", _IQ8toF(settings->weight_scale), (int32_t)settings->weight_scale);
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading weight_scale!", esp_err_to_name(err));
@@ -538,7 +626,7 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'wifi_ssid' = '%s'", settings->wifi_ssid);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->wifi_ssid = CONFIG_ESP_WIFI_SSID;
+            settings->wifi_ssid = strdup(CONFIG_ESP_WIFI_SSID);
             ESP_LOGI(TAG, "No value for 'wifi_ssid'; using default = '%s'", settings->wifi_ssid);
             break;
         default:
@@ -563,7 +651,7 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'wifi_password' = '%s'", settings->wifi_password);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->wifi_password = CONFIG_ESP_WIFI_PASSWORD;
+            settings->wifi_password = strdup(CONFIG_ESP_WIFI_PASSWORD);
             ESP_LOGI(TAG, "No value for 'wifi_password'; using default = '%s'", settings->wifi_password);
             break;
         default:

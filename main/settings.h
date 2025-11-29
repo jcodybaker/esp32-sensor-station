@@ -4,12 +4,13 @@
 #include <esp_err.h>
 #include <hx711.h>
 #include <esp_http_server.h>
+#include "IQmathLib.h"
 
 typedef struct {
     char *update_url;
     char *password;
     int32_t weight_tare;
-    int32_t weight_scale;
+    _iq8 weight_scale;
     hx711_gain_t weight_gain;
     char * wifi_ssid;
     char * wifi_password;

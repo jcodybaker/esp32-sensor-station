@@ -1,6 +1,7 @@
 #include "metrics.h"
 #include "weight.h"
 #include "wifi.h"
+#include "IQmathLib.h"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <string.h>
@@ -18,7 +19,8 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     
     // Get weight
     bool weight_available = false;
-    int32_t weight = weight_get_latest(&weight_available);
+    _iq8 weight = weight_get_latest(&weight_available);
+    int32_t weight_raw = weight_get_latest_raw(&weight_available);
     
     // Get WiFi RSSI
     int8_t rssi = wifi_get_rssi();
@@ -31,7 +33,18 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     
     if (weight_available) {
         offset += snprintf(response + offset, sizeof(response) - offset,
-                          "weight_grams %d\n", (int)weight);
+                          "weight_grams %.2f\n", _IQ8toF(weight));
+    }
+
+    // Build Prometheus text format response
+    // Raw weight metric
+    offset += snprintf(response + offset, sizeof(response) - offset,
+                      "# HELP weight_raw Current weight reading in raw units\n"
+                      "# TYPE weight_raw gauge\n");
+    
+    if (weight_available) {
+        offset += snprintf(response + offset, sizeof(response) - offset,
+                          "weight_raw %" PRIi32 "\n", weight_raw);
     }
     
     // WiFi RSSI metric
