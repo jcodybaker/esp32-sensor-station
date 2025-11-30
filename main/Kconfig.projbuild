@@ -20,9 +20,9 @@ menu "Weight Sensor Configuration"
         help
             GPIO number connected to DOUT pin
 
-    config WEIGHT_AVG_TIMES
+    config WEIGHT_SAMPLE_TIMES
         int "Samples to average"
-        default 5
+        default 10
 
     config WEIGHT_TARE
         int "Tare weight"

@@ -43,12 +43,52 @@ static void weight(void *pvParameters)
             continue;
         }
 
-        int32_t data;
-        r = hx711_read_average(&dev, CONFIG_WEIGHT_AVG_TIMES, &data);
-        if (r != ESP_OK)
+        // Read multiple samples and calculate median
+        int32_t readings[CONFIG_WEIGHT_SAMPLE_TIMES];
+        bool read_success = true;
+        
+        for (int i = 0; i < CONFIG_WEIGHT_SAMPLE_TIMES; i++)
         {
-            ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
+            ESP_ERROR_CHECK(hx711_wait(&dev, 200));
+            r = hx711_read_data(&dev, &readings[i]);
+            if (r != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
+                read_success = false;
+                break;
+            }
+        }
+        
+        if (!read_success)
+        {
             continue;
+        }
+        
+        // Sort readings to find median
+        for (int i = 0; i < CONFIG_WEIGHT_SAMPLE_TIMES - 1; i++)
+        {
+            for (int j = 0; j < CONFIG_WEIGHT_SAMPLE_TIMES - i - 1; j++)
+            {
+                if (readings[j] > readings[j + 1])
+                {
+                    int32_t temp = readings[j];
+                    readings[j] = readings[j + 1];
+                    readings[j + 1] = temp;
+                }
+            }
+        }
+        
+        // Get median value
+        int32_t data;
+        if (CONFIG_WEIGHT_SAMPLE_TIMES % 2 == 0)
+        {
+            // Even number of samples - average the two middle values
+            data = (readings[CONFIG_WEIGHT_SAMPLE_TIMES / 2 - 1] + readings[CONFIG_WEIGHT_SAMPLE_TIMES / 2]) / 2;
+        }
+        else
+        {
+            // Odd number of samples - take the middle value
+            data = readings[CONFIG_WEIGHT_SAMPLE_TIMES / 2];
         }
 
         ESP_LOGI(TAG, "Raw data: %" PRIi32, data);
