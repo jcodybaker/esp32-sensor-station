@@ -116,6 +116,13 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
     
+    // Allocate buffers on heap to avoid stack overflow
+    char *buffer = malloc(1024);
+    if (!buffer) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+    
     // Send HTML header and styles
     httpd_resp_sendstr_chunk(req, 
         "<!DOCTYPE html>\n"
@@ -149,9 +156,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         );
     
     // Send update_url with current value
-    char buffer[512];
     char *encoded_update_url = url_encode(settings->update_url);
-    snprintf(buffer, sizeof(buffer), 
+    snprintf(buffer, 1024, 
         "<hr class='minor'/>\n"
         "<label for='update_url'>Update URL:</label>\n"
         "<input type='text' id='update_url' name='update_url' value='%s'>\n",
@@ -160,7 +166,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     free(encoded_update_url);
     
     // Send weight_tare with current value
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
         "<label for='weight_tare'>Weight Tare:</label>\n"
         "<input type='number' id='weight_tare' name='weight_tare' value='%" PRId32 "'>\n",
@@ -168,14 +174,14 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send weight_scale with current value
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<label for='weight_scale'>Weight Scale:</label>\n"
         "<input type='text' id='weight_scale' name='weight_scale' value='%.8f'>\n",
         _IQ16toF(settings->weight_scale));
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send weight_gain with current value selected
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<label for='weight_gain'>Weight Gain:</label>\n"
         "<select id='weight_gain' name='weight_gain'>\n"
         "<option value='128'%s>128</option>\n"
@@ -189,7 +195,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     // Send wifi_ssid with current value
     char *encoded_wifi_ssid = url_encode(settings->wifi_ssid);
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
         "<label for='wifi_ssid'>Wifi SSID:</label>\n"
         "<input type='text' id='wifi_ssid' name='wifi_ssid' value='%s'>\n",
@@ -198,7 +204,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     free(encoded_wifi_ssid);
     
     // Send wifi_password and checkbox
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<label for='wifi_password'>Wifi Password:</label>\n"
         "<input type='password' id='wifi_password' name='wifi_password' placeholder='Leave blank to keep current'>\n"
         "<label for='wifi_ap_fallback_disable'>\n"
@@ -209,7 +215,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     // Send hostname with current value
     char *encoded_hostname = url_encode(settings->hostname);
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "<label for='hostname'>Hostname:</label>\n"
         "<input type='text' id='hostname' name='hostname' value='%s'>\n",
         encoded_hostname ? encoded_hostname : "");
@@ -250,7 +256,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
                 snprintf(label, sizeof(label), "%s", name);
             }
             
-            snprintf(buffer, sizeof(buffer),
+            snprintf(buffer, 1024,
                 "<option value='%hhd'%s>0x%02hhX - %s</option>\n",
                 i, is_selected ? " selected" : "", i, label);
             httpd_resp_sendstr_chunk(req, buffer);
@@ -258,6 +264,63 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     }
     
     httpd_resp_sendstr_chunk(req, "</select>\n");
+    
+    // Send MAC address filters section
+    httpd_resp_sendstr_chunk(req,
+        "<hr class='minor'/>\n"
+        "<label>BTHome MAC Address Filters:</label>\n"
+        "<div id='mac_filters_container'>\n");
+    
+    // Output existing MAC filters
+    for (size_t i = 0; i < settings->mac_filters_count; i++) {
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 settings->mac_filters[i].mac_addr[0],
+                 settings->mac_filters[i].mac_addr[1],
+                 settings->mac_filters[i].mac_addr[2],
+                 settings->mac_filters[i].mac_addr[3],
+                 settings->mac_filters[i].mac_addr[4],
+                 settings->mac_filters[i].mac_addr[5]);
+        
+        char *encoded_name = url_encode(settings->mac_filters[i].name);
+        
+        snprintf(buffer, 1024,
+            "<div class='mac_filter_row' style='margin: 10px 0; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;'>\n"
+            "  <input type='text' name='mac_filter[%zu][mac]' value='%s' placeholder='xx:xx:xx:xx:xx:xx' style='width: 180px;' pattern='[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}' title='MAC address format: xx:xx:xx:xx:xx:xx'>\n"
+            "  <input type='text' name='mac_filter[%zu][name]' value='%s' placeholder='Device Name' style='width: 200px;'>\n"
+            "  <label style='display: inline;'><input type='checkbox' name='mac_filter[%zu][enabled]' value='1'%s> Enabled</label>\n"
+            "  <button type='button' onclick='this.parentElement.remove()' style='width: auto; padding: 5px 10px; background: #dc3545; margin-left: 10px;'>Remove</button>\n"
+            "</div>\n",
+            i, mac_str, i, encoded_name ? encoded_name : "", i, settings->mac_filters[i].enabled ? " checked" : "");
+        httpd_resp_sendstr_chunk(req, buffer);
+        free(encoded_name);
+    }
+    
+    httpd_resp_sendstr_chunk(req,
+        "</div>\n"
+        "<button type='button' onclick='addMacFilter()' style='width: auto; background: #007bff; margin-top: 10px;'>Add MAC Filter</button>\n"
+        "<script>\n"
+        "var macFilterIndex = " );
+    
+    snprintf(buffer, 1024, "%zu;\n", settings->mac_filters_count);
+    httpd_resp_sendstr_chunk(req, buffer);
+    
+    httpd_resp_sendstr_chunk(req,
+        "function addMacFilter() {\n"
+        "  var container = document.getElementById('mac_filters_container');\n"
+        "  var div = document.createElement('div');\n"
+        "  div.className = 'mac_filter_row';\n"
+        "  div.style = 'margin: 10px 0; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;';\n"
+        "  div.innerHTML = `\n"
+        "    <input type='text' name='mac_filter[${macFilterIndex}][mac]' placeholder='xx:xx:xx:xx:xx:xx' style='width: 180px;' pattern='[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}' title='MAC address format: xx:xx:xx:xx:xx:xx'>\n"
+        "    <input type='text' name='mac_filter[${macFilterIndex}][name]' placeholder='Device Name' style='width: 200px;'>\n"
+        "    <label style='display: inline;'><input type='checkbox' name='mac_filter[${macFilterIndex}][enabled]' value='1' checked> Enabled</label>\n"
+        "    <button type='button' onclick='this.parentElement.remove()' style='width: auto; padding: 5px 10px; background: #dc3545; margin-left: 10px;'>Remove</button>\n"
+        "  `;\n"
+        "  container.appendChild(div);\n"
+        "  macFilterIndex++;\n"
+        "}\n"
+        "</script>\n");
     
     // Get firmware version info
     const esp_app_desc_t *app_desc = esp_app_get_description();
@@ -277,7 +340,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "</form>\n"
         "<footer style='margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; text-align: center; color: #999; font-size: 12px;'>\n");
     
-    snprintf(buffer, sizeof(buffer),
+    snprintf(buffer, 1024,
         "Firmware: %s<br>Hash: %s\n",
         app_desc->version, hash_str);
     httpd_resp_sendstr_chunk(req, buffer);
@@ -301,6 +364,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "      } else {\n"
         "        params.append(pair[0], pair[1]);\n"
         "      }\n"
+        "    } else if (pair[0].startsWith('mac_filter[') && pair[0].includes('[mac]')) {\n"
+        "      // Include MAC filter fields even if empty for proper indexing\n"
+        "      params.append(pair[0], pair[1]);\n"
         "    }\n"
         "  }\n"
         "  fetch('/settings?' + params.toString(), { method: 'POST' })\n"
@@ -330,6 +396,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "</html>\n");
     
     httpd_resp_sendstr_chunk(req, NULL);
+    free(buffer);
     return ESP_OK;
 }
 
@@ -564,7 +631,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     // Check and update BTHome object IDs
     // The multi-select will send multiple parameters with the same name
     // We need to parse them all and create a blob
-    uint8_t selected_ids[256];  // Maximum 256 object IDs
+    uint8_t *selected_ids = malloc(256);  // Maximum 256 object IDs
+    if (!selected_ids) {
+        nvs_close(settings_handle);
+        free(query_buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
     size_t selected_count = 0;
     
     // Parse all bthome_objects[] parameters
@@ -643,6 +716,130 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     } else {
         ESP_LOGI(TAG, "BTHome object IDs unchanged");
     }
+    free(selected_ids);
+    
+    // Check and update MAC address filters
+    // Format: mac_filter[N][field]=value where field is: mac, name, enabled
+    mac_filter_t *filters = malloc(64 * sizeof(mac_filter_t));  // Maximum 64 filters
+    if (!filters) {
+        nvs_close(settings_handle);
+        free(query_buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
+    size_t filter_count = 0;
+    
+    // Parse all mac_filter parameters
+    ESP_LOGI(TAG, "Parsing MAC address filters from query string");
+    for (size_t i = 0; i < 64; i++) {
+        char key_buf[64];
+        bool filter_found = false;
+        
+        // Try to get MAC address
+        snprintf(key_buf, sizeof(key_buf), "mac_filter%%5B%zu%%5D%%5Bmac%%5D", i);
+        if (httpd_query_key_value(query_buf, key_buf, param_buf, sizeof(param_buf)) == ESP_OK) {
+            url_decode(decoded_param, param_buf);
+            
+            // Parse MAC address string (format: xx:xx:xx:xx:xx:xx)
+            int mac_parts[6];
+            if (sscanf(decoded_param, "%02x:%02x:%02x:%02x:%02x:%02x",
+                      &mac_parts[0], &mac_parts[1], &mac_parts[2],
+                      &mac_parts[3], &mac_parts[4], &mac_parts[5]) == 6) {
+                for (int j = 0; j < 6; j++) {
+                    filters[filter_count].mac_addr[j] = (uint8_t)mac_parts[j];
+                }
+                filter_found = true;
+            } else {
+                ESP_LOGW(TAG, "Invalid MAC address format: %s", decoded_param);
+                continue;
+            }
+        } else {
+            break;  // No more filters
+        }
+        
+        if (filter_found) {
+            // Get name
+            snprintf(key_buf, sizeof(key_buf), "mac_filter%%5B%zu%%5D%%5Bname%%5D", i);
+            if (httpd_query_key_value(query_buf, key_buf, param_buf, sizeof(param_buf)) == ESP_OK) {
+                url_decode(decoded_param, param_buf);
+                strncpy(filters[filter_count].name, decoded_param, sizeof(filters[filter_count].name) - 1);
+                filters[filter_count].name[sizeof(filters[filter_count].name) - 1] = '\0';
+            } else {
+                filters[filter_count].name[0] = '\0';
+            }
+            
+            // Get enabled flag
+            snprintf(key_buf, sizeof(key_buf), "mac_filter%%5B%zu%%5D%%5Benabled%%5D", i);
+            filters[filter_count].enabled = (httpd_query_key_value(query_buf, key_buf, param_buf, sizeof(param_buf)) == ESP_OK);
+            
+            ESP_LOGI(TAG, "Found MAC filter[%zu]: %02x:%02x:%02x:%02x:%02x:%02x, name='%s', enabled=%d",
+                     filter_count,
+                     filters[filter_count].mac_addr[0],
+                     filters[filter_count].mac_addr[1],
+                     filters[filter_count].mac_addr[2],
+                     filters[filter_count].mac_addr[3],
+                     filters[filter_count].mac_addr[4],
+                     filters[filter_count].mac_addr[5],
+                     filters[filter_count].name,
+                     filters[filter_count].enabled);
+            
+            filter_count++;
+        }
+    }
+    
+    // Check if MAC filters have changed
+    bool mac_filters_changed = false;
+    if (filter_count != settings->mac_filters_count) {
+        mac_filters_changed = true;
+    } else {
+        for (size_t i = 0; i < filter_count; i++) {
+            if (memcmp(filters[i].mac_addr, settings->mac_filters[i].mac_addr, 6) != 0 ||
+                strcmp(filters[i].name, settings->mac_filters[i].name) != 0 ||
+                filters[i].enabled != settings->mac_filters[i].enabled) {
+                mac_filters_changed = true;
+                break;
+            }
+        }
+    }
+    
+    if (mac_filters_changed) {
+        if (filter_count > 0) {
+            err = nvs_set_blob(settings_handle, "mac_filters", filters, filter_count * sizeof(mac_filter_t));
+        } else {
+            // If no filters, erase the key
+            err = nvs_erase_key(settings_handle, "mac_filters");
+            if (err == ESP_ERR_NVS_NOT_FOUND) {
+                err = ESP_OK;  // Already doesn't exist, that's fine
+            }
+        }
+        
+        if (err == ESP_OK) {
+            if (settings->mac_filters != NULL) {
+                free(settings->mac_filters);
+            }
+            
+            if (filter_count > 0) {
+                settings->mac_filters = malloc(filter_count * sizeof(mac_filter_t));
+                if (settings->mac_filters != NULL) {
+                    memcpy(settings->mac_filters, filters, filter_count * sizeof(mac_filter_t));
+                    settings->mac_filters_count = filter_count;
+                } else {
+                    ESP_LOGE(TAG, "Failed to allocate memory for MAC filters");
+                    settings->mac_filters_count = 0;
+                }
+            } else {
+                settings->mac_filters = NULL;
+                settings->mac_filters_count = 0;
+            }
+            
+            updated = true;
+            ESP_LOGI(TAG, "Updated MAC filters - count: %zu", filter_count);
+        } else {
+            ESP_LOGE(TAG, "Failed to write mac_filters to NVS: %s", esp_err_to_name(err));
+        }
+    } else {
+        ESP_LOGI(TAG, "MAC filters unchanged");
+    }
     
     
     // Commit changes to NVS
@@ -658,6 +855,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     }
     
     nvs_close(settings_handle);
+    free(filters);
     free(query_buf);
     
     if (updated) {
@@ -693,6 +891,8 @@ esp_err_t settings_init(settings_t *settings)
     settings->hostname = NULL;
     settings->selected_bthome_object_ids = NULL;
     settings->selected_bthome_object_ids_count = 0;
+    settings->mac_filters = NULL;
+    settings->mac_filters_count = 0;
     // Open NVS handle
     ESP_LOGI(TAG, "\nOpening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -745,7 +945,7 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'password' = '%s'", settings->password);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->password = CONFIG_HTTPD_BASIC_AUTH_PASSWORD;
+            settings->password = strdup(CONFIG_HTTPD_BASIC_AUTH_PASSWORD);
             ESP_LOGI(TAG, "No value for 'password'; using default = '%s'", settings->password);
             break;
         default:
@@ -928,6 +1128,53 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading bthome_obj_ids!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "\\nReading 'mac_filters' from NVS...");
+    blob_size = 0;
+    err = nvs_get_blob(settings_handle, "mac_filters", NULL, &blob_size);
+    switch (err) {
+        case ESP_OK:
+            if (blob_size % sizeof(mac_filter_t) != 0) {
+                ESP_LOGE(TAG, "Invalid mac_filters blob size: %zu", blob_size);
+                break;
+            }
+            settings->mac_filters_count = blob_size / sizeof(mac_filter_t);
+            settings->mac_filters = malloc(blob_size);
+            if (settings->mac_filters == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mac_filters");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_blob(settings_handle, "mac_filters", settings->mac_filters, &blob_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mac_filters!", esp_err_to_name(err));
+                free(settings->mac_filters);
+                settings->mac_filters = NULL;
+                settings->mac_filters_count = 0;
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mac_filters' - %zu filters", settings->mac_filters_count);
+            for (size_t i = 0; i < settings->mac_filters_count; i++) {
+                ESP_LOGI(TAG, "  Filter[%zu]: %02x:%02x:%02x:%02x:%02x:%02x, name='%s', enabled=%d",
+                         i,
+                         settings->mac_filters[i].mac_addr[0],
+                         settings->mac_filters[i].mac_addr[1],
+                         settings->mac_filters[i].mac_addr[2],
+                         settings->mac_filters[i].mac_addr[3],
+                         settings->mac_filters[i].mac_addr[4],
+                         settings->mac_filters[i].mac_addr[5],
+                         settings->mac_filters[i].name,
+                         settings->mac_filters[i].enabled);
+            }
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mac_filters = NULL;
+            settings->mac_filters_count = 0;
+            ESP_LOGI(TAG, "No value for 'mac_filters'; using empty list");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mac_filters!", esp_err_to_name(err));
             return err;
     }
 

@@ -46,13 +46,39 @@ static bool is_object_id_selected(uint8_t object_id, settings_t *settings) {
     return false;
 }
 
-// Helper to check if we've already seen this metric
-static bool is_metric_seen(uint8_t object_id, uint8_t *seen_metrics, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        if (seen_metrics[i] == object_id) {
+// Helper function to check if a MAC address is filtered and get its name
+// Returns true if the MAC should be included (no filters or explicitly enabled)
+// Sets device_name to the configured name if available, otherwise to MAC string
+static bool is_mac_allowed(const esp_bd_addr_t addr, settings_t *settings, 
+                           char *device_name, size_t device_name_size) {
+    // If no filters configured, allow all devices and use MAC as name
+    if (settings->mac_filters == NULL || settings->mac_filters_count == 0) {
+        snprintf(device_name, device_name_size, "%02x:%02x:%02x:%02x:%02x:%02x",
+                 addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+        return true;
+    }
+    
+    // Check if this MAC is in the filter list
+    for (size_t i = 0; i < settings->mac_filters_count; i++) {
+        if (memcmp(settings->mac_filters[i].mac_addr, addr, 6) == 0) {
+            // Found matching filter
+            if (!settings->mac_filters[i].enabled) {
+                return false;  // Filter exists but is disabled
+            }
+            
+            // Use configured name if available, otherwise use MAC
+            if (settings->mac_filters[i].name[0] != '\0') {
+                strncpy(device_name, settings->mac_filters[i].name, device_name_size - 1);
+                device_name[device_name_size - 1] = '\0';
+            } else {
+                snprintf(device_name, device_name_size, "%02x:%02x:%02x:%02x:%02x:%02x",
+                         addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+            }
             return true;
         }
     }
+    
+    // MAC not in filter list - reject when filters are configured
     return false;
 }
 
@@ -104,9 +130,15 @@ static bool collect_metrics_iterator(const esp_bd_addr_t addr, int rssi,
 static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
                                            const bthome_packet_t *packet, void *user_data) {
     bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
-    char mac_str[18];
+    char device_name[64];
     
-    // Format MAC address
+    // Check if this MAC address is allowed by filters
+    if (!is_mac_allowed(addr, ctx->settings, device_name, sizeof(device_name))) {
+        return true;  // Skip this device
+    }
+    
+    char mac_str[18];
+    // Format MAC address for mac label
     snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     
@@ -131,11 +163,11 @@ static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
         char metric_name[128];
         make_prometheus_metric_name(name, metric_name, sizeof(metric_name));
         
-        // Add the metric value
+        // Add the metric value with device name and MAC
         *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
                                  ctx->buffer_size - *ctx->offset,
-                                 "%s{hostname=\"%s\",mac=\"%s\"} %.2f\n",
-                                 metric_name, ctx->hostname, mac_str, value);
+                                 "%s{hostname=\"%s\",device=\"%s\",mac=\"%s\"} %.2f\n",
+                                 metric_name, ctx->hostname, device_name, mac_str, value);
     }
     
     return true;
@@ -145,15 +177,21 @@ static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
 static bool output_rssi_iterator(const esp_bd_addr_t addr, int rssi,
                                   const bthome_packet_t *packet, void *user_data) {
     bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
-    char mac_str[18];
+    char device_name[64];
     
+    // Check if this MAC address is allowed by filters
+    if (!is_mac_allowed(addr, ctx->settings, device_name, sizeof(device_name))) {
+        return true;  // Skip this device
+    }
+    
+    char mac_str[18];
     snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     
     *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
                              ctx->buffer_size - *ctx->offset,
-                             "bthome_rssi_dbm{hostname=\"%s\",mac=\"%s\"} %d\n",
-                             ctx->hostname, mac_str, rssi);
+                             "bthome_rssi_dbm{hostname=\"%s\",device=\"%s\",mac=\"%s\"} %d\n",
+                             ctx->hostname, device_name, mac_str, rssi);
     
     return true;
 }
