@@ -54,7 +54,12 @@ For BTHome sensors I've been using Shelly's:
 * [BLU H&T Humidity/Temperature sensor](https://us.shelly.com/blogs/documentation/shelly-blu-h-t)
 * [BLU Distance](https://us.shelly.com/blogs/documentation/shelly-blu-distance)
 
+![Weight Hardware Side View](docs/assets/hw-weight1.png)
+![Weight Hardware Top View](docs/assets/hw-weight2.png)
+![Weight Hardware Bottom View](docs/assets/hw-weight3.png)
+
 ## TODO
 * Timestamp measurements and expire stale data
 * Provide build without weight sensor requirement
 * Publish to MQTT
+* BTHome Encryption Support
