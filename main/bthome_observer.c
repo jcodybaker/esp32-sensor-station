@@ -125,18 +125,23 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
     
     // Start HTML response
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_sendstr_chunk(req, "<!DOCTYPE html><html><head><title>BTHome Packets</title>");
-    httpd_resp_sendstr_chunk(req, "<style>");
-    httpd_resp_sendstr_chunk(req, "body { font-family: Arial, sans-serif; margin: 20px; }");
-    httpd_resp_sendstr_chunk(req, "h1 { color: #333; }");
-    httpd_resp_sendstr_chunk(req, ".packet { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; background: #f9f9f9; }");
-    httpd_resp_sendstr_chunk(req, ".mac { font-weight: bold; color: #0066cc; font-size: 1.1em; }");
-    httpd_resp_sendstr_chunk(req, ".rssi { color: #666; }");
-    httpd_resp_sendstr_chunk(req, ".measurement { margin: 5px 0 5px 20px; padding: 5px; background: #fff; border-left: 3px solid #4CAF50; }");
-    httpd_resp_sendstr_chunk(req, ".event { margin: 5px 0 5px 20px; padding: 5px; background: #fff; border-left: 3px solid #FF9800; }");
-    httpd_resp_sendstr_chunk(req, ".info { margin: 5px 0 5px 20px; color: #666; font-size: 0.9em; }");
-    httpd_resp_sendstr_chunk(req, "</style></head><body>");
-    httpd_resp_sendstr_chunk(req, "<h1>BTHome Packets (LFU Cache)</h1>");
+    httpd_resp_sendstr_chunk(req, "<!DOCTYPE html>\n<html>\n<head>\n<title>BTHome Packets</title>\n");
+    httpd_resp_sendstr_chunk(req, "<meta name='viewport' content='width=device-width, initial-scale=1'>\n");
+    httpd_resp_sendstr_chunk(req, "<style>\n");
+    httpd_resp_sendstr_chunk(req, "body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }\n");
+    httpd_resp_sendstr_chunk(req, "h1 { color: #333; }\n");
+    httpd_resp_sendstr_chunk(req, "a { color: #4CAF50; text-decoration: none; font-size: 18px; }\n");
+    httpd_resp_sendstr_chunk(req, "a:hover { text-decoration: underline; }\n");
+    httpd_resp_sendstr_chunk(req, ".packet { border: 1px solid #ddd; margin: 20px 0; padding: 20px; border-radius: 8px; background: #f4f4f4; }\n");
+    httpd_resp_sendstr_chunk(req, ".mac { font-weight: bold; color: #0066cc; font-size: 1.2em; margin-bottom: 10px; }\n");
+    httpd_resp_sendstr_chunk(req, ".rssi { color: #666; margin-bottom: 10px; font-size: 0.95em; }\n");
+    httpd_resp_sendstr_chunk(req, ".measurement { margin: 8px 0 8px 20px; padding: 8px; background: #fff; border-left: 3px solid #4CAF50; border-radius: 4px; }\n");
+    httpd_resp_sendstr_chunk(req, ".event { margin: 8px 0 8px 20px; padding: 8px; background: #fff; border-left: 3px solid #FF9800; border-radius: 4px; }\n");
+    httpd_resp_sendstr_chunk(req, ".info { margin: 8px 0 8px 20px; color: #666; font-size: 0.9em; background: #fff; padding: 6px; border-radius: 4px; }\n");
+    httpd_resp_sendstr_chunk(req, ".no-data { text-align: center; color: #666; padding: 40px 20px; background: #f4f4f4; border-radius: 8px; margin: 20px 0; }\n");
+    httpd_resp_sendstr_chunk(req, "</style>\n</head>\n<body>\n");
+    httpd_resp_sendstr_chunk(req, "<h1>BTHome Packets (LFU Cache)</h1>\n");
+    httpd_resp_sendstr_chunk(req, "<a href='/'>Home</a> | <a href='/settings'>Settings</a><br><br>\n");
     
     int count = 0;
     for (int i = 0; i < CACHE_SIZE; i++) {
@@ -251,7 +256,7 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
     }
     
     if (count == 0) {
-        httpd_resp_sendstr_chunk(req, "<p>No packets cached yet.</p>");
+        httpd_resp_sendstr_chunk(req, "<div class='no-data'>No packets cached yet.</div>");
     }
     
     httpd_resp_sendstr_chunk(req, "</body></html>");
