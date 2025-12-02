@@ -25,26 +25,6 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Release version: $VERSION"
     
-    - name: Configure WiFi Credentials
-      uses: espressif/esp-idf-ci-action@v1
-      with:
-        esp_idf_version: v5.5.1
-        target: esp32
-        command: |
-          cp sdkconfig.github sdkconfig.defaults
-          # Set WiFi SSID and Password from GitHub secrets
-          if [ -n "${{ secrets.WIFI_SSID }}" ]; then
-            echo "Configuring WiFi SSID from secrets"
-            sed -i 's/CONFIG_ESP_WIFI_SSID=".*"/CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}"/' sdkconfig.defaults
-            sed -i 's/CONFIG_ESP_WIFI_PASSWORD=".*"/CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"/' sdkconfig.defaults
-            idf.py set-target esp32
-            idf.py reconfigure \
-              -D CONFIG_ESP_WIFI_SSID="${{ secrets.WIFI_SSID }}" \
-              -D CONFIG_ESP_WIFI_PASSWORD="${{ secrets.WIFI_PASSWORD }}"
-          else
-            echo "Warning: WIFI_SSID secret not set, using default values"
-          fi
-    
     - name: Build
       uses: espressif/esp-idf-ci-action@v1
       with:
