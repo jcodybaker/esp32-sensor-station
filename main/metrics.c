@@ -18,7 +18,17 @@ typedef struct {
     int *offset;
     settings_t *settings;
     const char *hostname;
+    uint8_t *seen_metrics;      // Array to track which metrics we've seen
+    size_t seen_metrics_count;  // Number of unique metrics seen
 } bthome_metrics_ctx_t;
+
+// Context for first pass - collecting unique metrics
+typedef struct {
+    uint8_t *metric_ids;
+    size_t *metric_count;
+    size_t max_count;
+    settings_t *settings;
+} metric_collection_ctx_t;
 
 // Helper function to check if an object ID is selected
 static bool is_object_id_selected(uint8_t object_id, settings_t *settings) {
@@ -36,9 +46,63 @@ static bool is_object_id_selected(uint8_t object_id, settings_t *settings) {
     return false;
 }
 
-// Callback for iterating BTHome cached packets
-static bool bthome_metrics_iterator(const esp_bd_addr_t addr, int rssi, 
-                                     const bthome_packet_t *packet, void *user_data) {
+// Helper to check if we've already seen this metric
+static bool is_metric_seen(uint8_t object_id, uint8_t *seen_metrics, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (seen_metrics[i] == object_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Helper to convert BTHome object name to Prometheus metric name
+static void make_prometheus_metric_name(const char *name, char *out, size_t out_size) {
+    snprintf(out, out_size, "bthome_%s", name);
+    
+    // Replace spaces and hyphens with underscores, convert to lowercase
+    for (char *p = out; *p; p++) {
+        if (*p == ' ' || *p == '-') {
+            *p = '_';
+        } else if (*p >= 'A' && *p <= 'Z') {
+            *p = *p + ('a' - 'A');
+        }
+    }
+}
+
+// First pass: collect unique metric IDs
+static bool collect_metrics_iterator(const esp_bd_addr_t addr, int rssi,
+                                      const bthome_packet_t *packet, void *user_data) {
+    metric_collection_ctx_t *ctx = (metric_collection_ctx_t *)user_data;
+    
+    for (size_t i = 0; i < packet->measurement_count; i++) {
+        const bthome_measurement_t *m = &packet->measurements[i];
+        
+        if (!is_object_id_selected(m->object_id, ctx->settings)) {
+            continue;
+        }
+        
+        // Check if we've already recorded this metric
+        bool found = false;
+        for (size_t j = 0; j < *ctx->metric_count; j++) {
+            if (ctx->metric_ids[j] == m->object_id) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found && *ctx->metric_count < ctx->max_count) {
+            ctx->metric_ids[*ctx->metric_count] = m->object_id;
+            (*ctx->metric_count)++;
+        }
+    }
+    
+    return true;
+}
+
+// Second pass: output metrics for a specific object ID
+static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
+                                           const bthome_packet_t *packet, void *user_data) {
     bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
     char mac_str[18];
     
@@ -46,18 +110,13 @@ static bool bthome_metrics_iterator(const esp_bd_addr_t addr, int rssi,
     snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     
-    // Add RSSI metric for this device
-    *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
-                             ctx->buffer_size - *ctx->offset,
-                             "bthome_rssi_dbm{hostname=\"%s\",mac=\"%s\"} %d\n",
-                             ctx->hostname, mac_str, rssi);
+    // Find measurements matching the current metric we're outputting
+    uint8_t current_metric_id = ctx->seen_metrics[ctx->seen_metrics_count - 1];
     
-    // Iterate through measurements
     for (size_t i = 0; i < packet->measurement_count; i++) {
         const bthome_measurement_t *m = &packet->measurements[i];
         
-        // Check if this object ID is selected in settings
-        if (!is_object_id_selected(m->object_id, ctx->settings)) {
+        if (m->object_id != current_metric_id) {
             continue;
         }
         
@@ -69,27 +128,34 @@ static bool bthome_metrics_iterator(const esp_bd_addr_t addr, int rssi,
             continue;
         }
         
-        // Convert name to Prometheus-friendly metric name (lowercase, underscores)
         char metric_name[128];
-        snprintf(metric_name, sizeof(metric_name), "bthome_%s", name);
+        make_prometheus_metric_name(name, metric_name, sizeof(metric_name));
         
-        // Replace spaces and hyphens with underscores, convert to lowercase
-        for (char *p = metric_name; *p; p++) {
-            if (*p == ' ' || *p == '-') {
-                *p = '_';
-            } else if (*p >= 'A' && *p <= 'Z') {
-                *p = *p + ('a' - 'A');
-            }
-        }
-        
-        // Add the metric
+        // Add the metric value
         *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
                                  ctx->buffer_size - *ctx->offset,
                                  "%s{hostname=\"%s\",mac=\"%s\"} %.2f\n",
                                  metric_name, ctx->hostname, mac_str, value);
     }
     
-    return true;  // Continue iteration
+    return true;
+}
+
+// Output RSSI for all devices
+static bool output_rssi_iterator(const esp_bd_addr_t addr, int rssi,
+                                  const bthome_packet_t *packet, void *user_data) {
+    bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
+    char mac_str[18];
+    
+    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+             addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+    
+    *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
+                             ctx->buffer_size - *ctx->offset,
+                             "bthome_rssi_dbm{hostname=\"%s\",mac=\"%s\"} %d\n",
+                             ctx->hostname, mac_str, rssi);
+    
+    return true;
 }
 
 
@@ -134,7 +200,6 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                           "weight_grams{hostname=\"%s\"} %.2f\n", hostname, weight);
     }
 
-    // Build Prometheus text format response
     // Raw weight metric
     offset += snprintf(response + offset, response_size - offset,
                       "# HELP weight_raw Current weight reading in raw units\n"
@@ -161,22 +226,77 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                       "# TYPE uptime_seconds counter\n"
                       "uptime_seconds{hostname=\"%s\"} %lld\n", hostname, uptime_seconds);
     
-    // BTHome RSSI metric header
-    offset += snprintf(response + offset, response_size - offset,
-                      "# HELP bthome_rssi_dbm BTHome device signal strength in dBm\n"
-                      "# TYPE bthome_rssi_dbm gauge\n");
-    
-    // Add BTHome metrics from cache
+    // Add BTHome metrics from cache (properly grouped by metric family)
     if (settings->selected_bthome_object_ids_count > 0) {
-        bthome_metrics_ctx_t ctx = {
+        // First pass: collect all unique metric IDs
+        uint8_t unique_metrics[256];
+        size_t unique_count = 0;
+        
+        metric_collection_ctx_t collect_ctx = {
+            .metric_ids = unique_metrics,
+            .metric_count = &unique_count,
+            .max_count = 256,
+            .settings = settings
+        };
+        
+        bthome_cache_iterate(collect_metrics_iterator, &collect_ctx);
+        
+        // Output BTHome RSSI metric family first
+        offset += snprintf(response + offset, response_size - offset,
+                          "# HELP bthome_rssi_dbm BTHome device signal strength in dBm\n"
+                          "# TYPE bthome_rssi_dbm gauge\n");
+        
+        bthome_metrics_ctx_t rssi_ctx = {
             .buffer = response,
             .buffer_size = response_size,
             .offset = &offset,
             .settings = settings,
-            .hostname = hostname
+            .hostname = hostname,
+            .seen_metrics = NULL,
+            .seen_metrics_count = 0
         };
         
-        bthome_cache_iterate(bthome_metrics_iterator, &ctx);
+        bthome_cache_iterate(output_rssi_iterator, &rssi_ctx);
+        
+        // Now output each unique metric family with its HELP and TYPE
+        for (size_t i = 0; i < unique_count; i++) {
+            uint8_t metric_id = unique_metrics[i];
+            const char *name = bthome_get_object_name(metric_id);
+            const char *unit_desc = bthome_get_object_unit_description(metric_id);
+            
+            if (name == NULL) {
+                continue;
+            }
+            
+            char metric_name[128];
+            make_prometheus_metric_name(name, metric_name, sizeof(metric_name));
+            
+            // Output HELP and TYPE for this metric family
+            offset += snprintf(response + offset, response_size - offset,
+                              "# HELP %s BTHome %s", metric_name, name);
+            
+            if (unit_desc != NULL && strlen(unit_desc) > 0) {
+                offset += snprintf(response + offset, response_size - offset,
+                                  " in %s", unit_desc);
+            }
+            
+            offset += snprintf(response + offset, response_size - offset, "\n");
+            offset += snprintf(response + offset, response_size - offset,
+                              "# TYPE %s gauge\n", metric_name);
+            
+            // Output all values for this metric family
+            bthome_metrics_ctx_t metric_ctx = {
+                .buffer = response,
+                .buffer_size = response_size,
+                .offset = &offset,
+                .settings = settings,
+                .hostname = hostname,
+                .seen_metrics = &metric_id,
+                .seen_metrics_count = 1
+            };
+            
+            bthome_cache_iterate(output_metric_for_id_iterator, &metric_ctx);
+        }
     }
     
     // Set response headers and send
