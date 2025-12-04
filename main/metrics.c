@@ -8,6 +8,7 @@
 #include <esp_timer.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/time.h>
 
 static const char *TAG = "metrics";
 
@@ -98,8 +99,21 @@ static void make_prometheus_metric_name(const char *name, char *out, size_t out_
 
 // First pass: collect unique metric IDs
 static bool collect_metrics_iterator(const esp_bd_addr_t addr, int rssi,
-                                      const bthome_packet_t *packet, void *user_data) {
+                                      const bthome_packet_t *packet, 
+                                      const struct timeval *last_seen, void *user_data) {
     metric_collection_ctx_t *ctx = (metric_collection_ctx_t *)user_data;
+    
+    // Get current time
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    
+    // Calculate time difference in seconds
+    int64_t time_diff = (now.tv_sec - last_seen->tv_sec);
+    
+    // Skip if last_seen is more than 10 minutes (600 seconds) in the past
+    if (time_diff > 600) {
+        return true;
+    }
     
     for (size_t i = 0; i < packet->measurement_count; i++) {
         const bthome_measurement_t *m = &packet->measurements[i];
@@ -128,9 +142,22 @@ static bool collect_metrics_iterator(const esp_bd_addr_t addr, int rssi,
 
 // Second pass: output metrics for a specific object ID
 static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
-                                           const bthome_packet_t *packet, void *user_data) {
+                                           const bthome_packet_t *packet, 
+                                           const struct timeval *last_seen, void *user_data) {
     bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
     char device_name[64];
+    
+    // Get current time
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    
+    // Calculate time difference in seconds
+    int64_t time_diff = (now.tv_sec - last_seen->tv_sec);
+    
+    // Skip if last_seen is more than 10 minutes (600 seconds) in the past
+    if (time_diff > 600) {
+        return true;
+    }
     
     // Check if this MAC address is allowed by filters
     if (!is_mac_allowed(addr, ctx->settings, device_name, sizeof(device_name))) {
@@ -141,6 +168,9 @@ static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
     // Format MAC address for mac label
     snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+    
+    // Convert last_seen to milliseconds since epoch for Prometheus timestamp
+    int64_t timestamp_ms = (int64_t)last_seen->tv_sec * 1000 + last_seen->tv_usec / 1000;
     
     // Find measurements matching the current metric we're outputting
     uint8_t current_metric_id = ctx->seen_metrics[ctx->seen_metrics_count - 1];
@@ -163,11 +193,11 @@ static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
         char metric_name[128];
         make_prometheus_metric_name(name, metric_name, sizeof(metric_name));
         
-        // Add the metric value with device name and MAC
+        // Add the metric value with device name, MAC, and timestamp
         *ctx->offset += snprintf(ctx->buffer + *ctx->offset, 
                                  ctx->buffer_size - *ctx->offset,
-                                 "%s{hostname=\"%s\",device=\"%s\",mac=\"%s\"} %.2f\n",
-                                 metric_name, ctx->hostname, device_name, mac_str, value);
+                                 "%s{hostname=\"%s\",device=\"%s\",mac=\"%s\"} %.2f %lld\n",
+                                 metric_name, ctx->hostname, device_name, mac_str, value, timestamp_ms);
     }
     
     return true;
@@ -175,9 +205,22 @@ static bool output_metric_for_id_iterator(const esp_bd_addr_t addr, int rssi,
 
 // Output RSSI for all devices
 static bool output_rssi_iterator(const esp_bd_addr_t addr, int rssi,
-                                  const bthome_packet_t *packet, void *user_data) {
+                                  const bthome_packet_t *packet, 
+                                  const struct timeval *last_seen, void *user_data) {
     bthome_metrics_ctx_t *ctx = (bthome_metrics_ctx_t *)user_data;
     char device_name[64];
+    
+    // Get current time
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    
+    // Calculate time difference in seconds
+    int64_t time_diff = (now.tv_sec - last_seen->tv_sec);
+    
+    // Skip if last_seen is more than 10 minutes (600 seconds) in the past
+    if (time_diff > 600) {
+        return true;
+    }
     
     // Check if this MAC address is allowed by filters
     if (!is_mac_allowed(addr, ctx->settings, device_name, sizeof(device_name))) {

@@ -21,6 +21,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_mac.h"
+#include "esp_sntp.h"
+#include "esp_netif_sntp.h"
+#include "lwip/ip_addr.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -69,7 +72,9 @@ static int s_retry_num = 0;
 static bool sta_configured = false;
 static bool ap_active = false;
 static bool ap_configured = false;
+extern bool g_ntp_initialized;
 
+void ntp_configure(void);
 
 /* Initialize soft AP */
 void wifi_configure_softap(void)
@@ -249,6 +254,7 @@ void wifi_init(settings_t *settings)
         ESP_LOGI(TAG_AP, "No WiFi credentials set, starting in AP mode");
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP) );
         wifi_configure_softap();
+        ntp_configure();
         ESP_ERROR_CHECK(esp_wifi_start() );
         ap_active = true;
         return;
@@ -256,6 +262,9 @@ void wifi_init(settings_t *settings)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
     wifi_configure_sta(settings);
+
+    ntp_configure();
+
     ESP_LOGI(TAG, "Attempting connection to WiFi SSID: %s", settings->wifi_ssid);
     ESP_ERROR_CHECK(esp_wifi_start() );
 
@@ -286,3 +295,21 @@ void wifi_init(settings_t *settings)
     }
 }
 
+void time_sync_notification_cb(struct timeval *tv)
+{
+    g_ntp_initialized = true;
+    ESP_LOGI(TAG, "Notification of a time synchronization event");
+}
+
+void ntp_configure(void) {
+    ESP_LOGI(TAG, "Configuring NTP");
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    config.start = false;                      
+    config.server_from_dhcp = true;
+    config.renew_servers_after_new_IP = true;
+    config.index_of_first_server = 1;
+    config.ip_event_to_renew = IP_EVENT_STA_GOT_IP;
+    config.sync_cb = time_sync_notification_cb;
+    esp_netif_sntp_init(&config);
+    esp_netif_sntp_start();
+}

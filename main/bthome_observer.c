@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -11,6 +12,7 @@
 #include "bthome_observer.h"
 
 static const char *TAG = "bthome_observer";
+extern bool g_ntp_initialized;
 
 #define CACHE_SIZE 10
 
@@ -20,13 +22,12 @@ typedef struct {
     int rssi;
     bthome_packet_t packet;
     uint32_t frequency;     // Access frequency counter
-    uint32_t last_access;   // Timestamp of last access
+    struct timeval last_seen;   // Timestamp of last access
     bool occupied;          // Whether this slot is in use
 } cache_entry_t;
 
 // LFU Cache
 static cache_entry_t packet_cache[CACHE_SIZE];
-static uint32_t global_timestamp = 0;
 static SemaphoreHandle_t cache_mutex = NULL;
 
 // Compare two MAC addresses
@@ -38,7 +39,7 @@ static bool mac_equal(const esp_bd_addr_t a, const esp_bd_addr_t b) {
 static int find_lfu_entry(void) {
     int lfu_idx = -1;
     uint32_t min_freq = UINT32_MAX;
-    uint32_t oldest_time = UINT32_MAX;
+    struct timeval oldest_time = { .tv_sec = UINT32_MAX, .tv_usec = UINT32_MAX };
     
     for (int i = 0; i < CACHE_SIZE; i++) {
         if (!packet_cache[i].occupied) {
@@ -46,9 +47,9 @@ static int find_lfu_entry(void) {
         }
         
         if (packet_cache[i].frequency < min_freq || 
-            (packet_cache[i].frequency == min_freq && packet_cache[i].last_access < oldest_time)) {
+            (packet_cache[i].frequency == min_freq && timercmp(&packet_cache[i].last_seen, &oldest_time, <))) {
             min_freq = packet_cache[i].frequency;
-            oldest_time = packet_cache[i].last_access;
+            oldest_time = packet_cache[i].last_seen;
             lfu_idx = i;
         }
     }
@@ -73,7 +74,12 @@ static void cache_packet(esp_bd_addr_t addr, int rssi, const bthome_packet_t *pa
     }
     
     xSemaphoreTake(cache_mutex, portMAX_DELAY);
-    global_timestamp++;
+    struct timeval now;
+    if (gettimeofday(&now, NULL) != 0) {
+        ESP_LOGE(TAG, "Failed to get current time");
+        xSemaphoreGive(cache_mutex);
+        return;
+    }
     
     // Check if MAC already exists
     int idx = find_entry_by_mac(addr);
@@ -85,7 +91,7 @@ static void cache_packet(esp_bd_addr_t addr, int rssi, const bthome_packet_t *pa
         if (bthome_packet_copy(&packet_cache[idx].packet, packet) == 0) {
             packet_cache[idx].rssi = rssi;
             packet_cache[idx].frequency++;
-            packet_cache[idx].last_access = global_timestamp;
+            packet_cache[idx].last_seen = now;
         } else {
             ESP_LOGE(TAG, "Failed to copy packet for cache update");
         }
@@ -103,7 +109,7 @@ static void cache_packet(esp_bd_addr_t addr, int rssi, const bthome_packet_t *pa
                 memcpy(packet_cache[idx].addr, addr, 6);
                 packet_cache[idx].rssi = rssi;
                 packet_cache[idx].frequency = 1;
-                packet_cache[idx].last_access = global_timestamp;
+                packet_cache[idx].last_seen = now;
                 packet_cache[idx].occupied = true;
             } else {
                 ESP_LOGE(TAG, "Failed to copy packet for new cache entry");
@@ -140,7 +146,7 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, ".info { margin: 8px 0 8px 20px; color: #666; font-size: 0.9em; background: #fff; padding: 6px; border-radius: 4px; }\n");
     httpd_resp_sendstr_chunk(req, ".no-data { text-align: center; color: #666; padding: 40px 20px; background: #f4f4f4; border-radius: 8px; margin: 20px 0; }\n");
     httpd_resp_sendstr_chunk(req, "</style>\n</head>\n<body>\n");
-    httpd_resp_sendstr_chunk(req, "<h1>BTHome Packets (LFU Cache)</h1>\n");
+    httpd_resp_sendstr_chunk(req, "<h1>BTHome Packets</h1>\n");
     httpd_resp_sendstr_chunk(req, "<a href='/'>Home</a> | <a href='/settings'>Settings</a><br><br>\n");
     
     int count = 0;
@@ -159,10 +165,16 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
                 entry->addr[0], entry->addr[1], entry->addr[2], 
                 entry->addr[3], entry->addr[4], entry->addr[5]);
         httpd_resp_sendstr_chunk(req, buffer);
+
+        struct tm *nowtm;
+        nowtm = localtime(&entry->last_seen.tv_sec);
         
-        snprintf(buffer, sizeof(buffer), 
-                "<div class='rssi'>RSSI: %d dBm | Frequency: %lu | Last: %lu</div>",
-                entry->rssi, (unsigned long)entry->frequency, (unsigned long)entry->last_access);
+        int len = snprintf(buffer, sizeof(buffer), 
+                "<div class='rssi'>RSSI: %d dBm | Frequency: %lu | Last: ",
+                entry->rssi, (unsigned long)entry->frequency);
+        len += strftime(buffer + len, sizeof(buffer) - len, "%Y-%m-%d %H:%M:%S", nowtm);
+        len += snprintf(buffer + len, sizeof(buffer) - len, ".%06ld</div>", entry->last_seen.tv_usec);
+        strncat(buffer + len, "</div>", sizeof(buffer) - len);
         httpd_resp_sendstr_chunk(req, buffer);
         
         // Device name
@@ -255,6 +267,9 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
         httpd_resp_sendstr_chunk(req, "</div>");
     }
     
+    if (!g_ntp_initialized) {
+        httpd_resp_sendstr_chunk(req, "<div class='info'>Warning: NTP time not synchronized. BTHome capture will start once synchronized.</div>");
+    }
     if (count == 0) {
         httpd_resp_sendstr_chunk(req, "<div class='no-data'>No packets cached yet.</div>");
     }
@@ -268,6 +283,11 @@ static esp_err_t bthome_packets_handler(httpd_req_t *req) {
 
 static void bthome_packet_callback(esp_bd_addr_t addr, int rssi, 
                                     const bthome_packet_t *packet, void *user_data) {
+    if (g_ntp_initialized == false) {
+        ESP_LOGW(TAG, "NTP time not synchronized yet, ignoring BTHome packet");
+        return;
+    }
+    
     // Cache the packet first
     cache_packet(addr, rssi, packet);
     
@@ -435,6 +455,7 @@ void bthome_cache_iterate(bthome_cache_iterator_t callback, void *user_data) {
                 packet_cache[i].addr,
                 packet_cache[i].rssi,
                 &packet_cache[i].packet,
+                &packet_cache[i].last_seen,
                 user_data
             );
             

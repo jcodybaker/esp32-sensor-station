@@ -17,6 +17,8 @@
 #include <esp_log.h>
 #include "bthome_observer.h"
 
+bool g_ntp_initialized = false;
+
 void app_main(void)
 {
     //Initialize NVS
