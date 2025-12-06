@@ -11,7 +11,7 @@
 #define MAX_SENSORS 60  // Increased to support BTHome + weight sensors
 
 // Maximum length for sensor name and unit strings
-#define SENSOR_NAME_MAX_LEN 32
+#define SENSOR_NAME_MAX_LEN 40
 #define SENSOR_UNIT_MAX_LEN 16
 
 typedef struct {
