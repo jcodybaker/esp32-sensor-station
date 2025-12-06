@@ -42,6 +42,10 @@ static const char *sensors_display_html = ""
     ".unavailable .sensor-value { color: #999; }\n"
     "a { display: inline-block; margin: 10px 10px; color: #4CAF50; text-decoration: none; font-size: 18px; }\n"
     "a:hover { text-decoration: underline; }\n"
+    ".sensor-action { margin-top: 10px; }\n"
+    ".sensor-action button { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }\n"
+    ".sensor-action button:hover { background: #45a049; }\n"
+    ".sensor-action button:disabled { background: #ccc; cursor: not-allowed; }\n"
     "</style>\n"
     "</head>\n"
     "<body>\n"
@@ -69,12 +73,15 @@ static const char *sensors_display_html = ""
     "          const availClass = sensor.available ? '' : 'unavailable';\n"
     "          const value = sensor.available ? sensor.value.toLocaleString(undefined, {maximumFractionDigits: 2}) : '--';\n"
     "          const updated = formatTimeAgo(sensor.last_updated);\n"
+    "          const actionBtn = (sensor.link_url && sensor.link_text) ? \n"
+    "            `<div class='sensor-action'><button onclick='sensorAction(\"${sensor.link_url}\")' ${sensor.available ? '' : 'disabled'}>${sensor.link_text}</button></div>` : '';\n"
     "          return `\n"
     "            <div class='sensor-card ${availClass}'>\n"
     "              <div class='sensor-name'>${sensor.name}</div>\n"
     "              <div class='sensor-value'>${value}</div>\n"
     "              <div class='sensor-unit'>${sensor.unit}</div>\n"
     "              <div class='sensor-updated'>${updated}</div>\n"
+    "              ${actionBtn}\n"
     "            </div>\n"
     "          `;\n"
     "        }).join('');\n"
@@ -90,6 +97,14 @@ static const char *sensors_display_html = ""
     "      document.getElementById('status').textContent = 'Error: ' + error;\n"
     "      document.getElementById('status').className = 'status inactive';\n"
     "    });\n"
+    "}\n"
+    "function sensorAction(url) {\n"
+    "  fetch(url, {method: 'POST'})\n"
+    "    .then(response => {\n"
+    "      if (response.ok) updateSensors();\n"
+    "      else alert('Action failed');\n"
+    "    })\n"
+    "    .catch(error => alert('Action error: ' + error));\n"
     "}\n"
     "updateSensors();\n"
     "setInterval(updateSensors, 1000);\n"
@@ -165,13 +180,28 @@ static esp_err_t sensors_data_handler(httpd_req_t *req) {
             pos += snprintf(json_buf + pos, 2048 - pos, ",");
         }
         
-        pos += snprintf(json_buf + pos, 2048 - pos,
-                       "{\"name\":\"%s\",\"unit\":\"%s\",\"value\":%.2f,\"last_updated\":%" PRId64 ",\"available\":%s}",
+        // Build JSON object for this sensor
+        char sensor_json[512];
+        int spos = snprintf(sensor_json, sizeof(sensor_json),
+                       "{\"name\":\"%s\",\"unit\":\"%s\",\"value\":%.2f,\"last_updated\":%" PRId64 ",\"available\":%s",
                        sensors[i].name,
                        sensors[i].unit,
                        sensors[i].value,
                        (int64_t)sensors[i].last_updated,
                        sensors[i].available ? "true" : "false");
+        
+        // Add optional link fields if present
+        if (sensors[i].link_url[0] != '\0' && sensors[i].link_text[0] != '\0') {
+            spos += snprintf(sensor_json + spos, sizeof(sensor_json) - spos,
+                           ",\"link_url\":\"%s\",\"link_text\":\"%s\"",
+                           sensors[i].link_url,
+                           sensors[i].link_text);
+        }
+        
+        spos += snprintf(sensor_json + spos, sizeof(sensor_json) - spos, "}");
+        
+        // Append to main buffer
+        pos += snprintf(json_buf + pos, 2048 - pos, "%s", sensor_json);
     }
     
     pos += snprintf(json_buf + pos, 2048 - pos, "]}");
@@ -257,6 +287,8 @@ int sensors_register(const char *name, const char *unit) {
     sensors[id].value = 0.0f;
     sensors[id].last_updated = 0;
     sensors[id].available = false;
+    sensors[id].link_url[0] = '\0';
+    sensors[id].link_text[0] = '\0';
     
     ESP_LOGI(TAG, "Registered sensor %d: '%s' (%s)", id, sensors[id].name, sensors[id].unit);
     
@@ -282,6 +314,42 @@ bool sensors_update(int sensor_id, float value, bool available) {
     sensors[sensor_id].value = value;
     sensors[sensor_id].available = available;
     sensors[sensor_id].last_updated = time(NULL);
+    
+    if (sensors_mutex != NULL) {
+        xSemaphoreGive(sensors_mutex);
+    }
+    return true;
+}
+
+bool sensors_update_with_link(int sensor_id, float value, bool available, const char *link_url, const char *link_text) {
+    if (sensors_mutex != NULL) {
+        xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+    }
+    
+    if (sensor_id < 0 || sensor_id >= sensor_count) {
+        ESP_LOGE(TAG, "Invalid sensor_id %d (valid range: 0-%d)", sensor_id, sensor_count - 1);
+        if (sensors_mutex != NULL) {
+            xSemaphoreGive(sensors_mutex);
+        }
+        return false;
+    }
+    
+    sensors[sensor_id].value = value;
+    sensors[sensor_id].available = available;
+    sensors[sensor_id].last_updated = time(NULL);
+    
+    // Update link fields if provided
+    if (link_url != NULL && link_text != NULL) {
+        strncpy(sensors[sensor_id].link_url, link_url, sizeof(sensors[sensor_id].link_url) - 1);
+        sensors[sensor_id].link_url[sizeof(sensors[sensor_id].link_url) - 1] = '\0';
+        
+        strncpy(sensors[sensor_id].link_text, link_text, sizeof(sensors[sensor_id].link_text) - 1);
+        sensors[sensor_id].link_text[sizeof(sensors[sensor_id].link_text) - 1] = '\0';
+    } else {
+        // Clear link fields if not provided
+        sensors[sensor_id].link_url[0] = '\0';
+        sensors[sensor_id].link_text[0] = '\0';
+    }
     
     if (sensors_mutex != NULL) {
         xSemaphoreGive(sensors_mutex);

@@ -8,7 +8,7 @@
 #include <esp_http_server.h>
 
 // Maximum number of sensors that can be registered
-#define MAX_SENSORS 60  // Increased to support BTHome + weight sensors
+#define MAX_SENSORS 60
 
 // Maximum length for sensor name and unit strings
 #define SENSOR_NAME_MAX_LEN 40
@@ -20,6 +20,8 @@ typedef struct {
     float value;
     time_t last_updated;
     bool available;
+    char link_url[64];      // Optional action link URL
+    char link_text[32];     // Optional action link text
 } sensor_data_t;
 
 /**
@@ -48,6 +50,19 @@ int sensors_register(const char *name, const char *unit);
  * @return true if update was successful, false otherwise
  */
 bool sensors_update(int sensor_id, float value, bool available);
+
+/**
+ * @brief Update a sensor's value with optional link
+ * 
+ * @param sensor_id Sensor ID returned from sensors_register
+ * @param value New sensor value
+ * @param available Whether the sensor data is available/valid
+ * @param link_url Optional action link URL (can be NULL)
+ * @param link_text Optional action link text (can be NULL)
+ * @return true if update was successful, false otherwise
+ */
+bool sensors_update_with_link(int sensor_id, float value, bool available, 
+                               const char *link_url, const char *link_text);
 
 /**
  * @brief Get the current value of a sensor

@@ -113,7 +113,10 @@ static void weight(void *pvParameters)
         
         // Update sensor values if registered
         if (sensor_id_grams >= 0) {
-            sensors_update(sensor_id_grams, g_latest_weight_grams, true);
+            // Build tare URL with current raw value
+            char tare_url[64];
+            snprintf(tare_url, sizeof(tare_url), "/settings?weight_tare=%d", (int)g_latest_weight_raw);
+            sensors_update_with_link(sensor_id_grams, g_latest_weight_grams, true, tare_url, "Tare");
         }
         if (sensor_id_lbs >= 0) {
             float lbs = g_latest_weight_grams / 453.59237f;
