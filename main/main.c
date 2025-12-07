@@ -16,6 +16,8 @@
 #include "metrics.h"
 #include <esp_log.h>
 #include "bthome_observer.h"
+#include "weight.h"
+#include "temperature.h"
 
 bool g_ntp_initialized = false;
 
@@ -39,12 +41,8 @@ void app_main(void)
     httpd_handle_t http_server = http_server_init();
     settings_register(settings, http_server);
     sensors_init(settings, http_server);
-    if (settings->ds18b20_gpio >= 0) {
-        init_ds18b20(settings);
-    }
-    if (settings->weight_dout_gpio >= 0 && settings->weight_sck_gpio >= 0) {
-        weight_init(settings);
-    }
+    init_ds18b20(settings);
+    weight_init(settings);
     ota_init(settings, http_server);
     metrics_init(settings, http_server);
     bthome_observer_init(settings, http_server);

@@ -5,7 +5,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-void init_ds18b20(settings_t *settings)
+typedef struct {
+    uint64_t address;
+    int sensor_id;
+} ds18b20_info_t;
+
+void init_ds18b20(settings_t *settings);
+int get_ds18b20_devices(ds18b20_info_t *devices, int max_devices);
 
 #endif // TEMPERATURE_H
 

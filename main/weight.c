@@ -142,6 +142,10 @@ uint32_t weight_get_latest_raw(bool *available) {
 
 void weight_init(settings_t *settings)
 {
+    if (settings->weight_dout_gpio < 0 || settings->weight_sck_gpio < 0) {
+        ESP_LOGW(TAG, "Weight HX711 GPIOs not configured, skipping weight initialization");
+        return;
+    }
     // Register weight sensors
     sensor_id_grams = sensors_register("Weight", "g");
     sensor_id_lbs = sensors_register("Weight", "lbs");

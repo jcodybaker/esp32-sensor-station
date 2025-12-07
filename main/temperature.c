@@ -12,6 +12,7 @@
 #include "ds18b20.h"
 #include "settings.h"
 #include "sensors.h"
+#include "temperature.h"
 
 #define EXAMPLE_ONEWIRE_BUS_GPIO    18
 #define EXAMPLE_ONEWIRE_MAX_DS18B20 5
@@ -22,6 +23,7 @@ static int ds18b20_device_num = 0;
 typedef struct {
     ds18b20_device_handle_t dev;
     int sensor_id;
+    uint64_t address;
 } ds18b20_device_t;
 
 static ds18b20_device_t ds18b20s[EXAMPLE_ONEWIRE_MAX_DS18B20];
@@ -46,10 +48,14 @@ void run_ds18b20(void *pvParameters) {
 }
 
 void init_ds18b20(settings_t *settings) {
+    if (settings->ds18b20_gpio < 0) {
+        ESP_LOGW(TAG, "DS18B20 GPIO not configured, skipping DS18B20 initialization");
+        return;
+    }
     // install 1-wire bus
     onewire_bus_handle_t bus = NULL;
     onewire_bus_config_t bus_config = {
-        .bus_gpio_num = EXAMPLE_ONEWIRE_BUS_GPIO,
+        .bus_gpio_num = settings->ds18b20_gpio,
         .flags = {
             .en_pull_up = true, // enable the internal pull-up resistor in case the external device didn't have one
         }
@@ -75,6 +81,7 @@ void init_ds18b20(settings_t *settings) {
             // check if the device is a DS18B20, if so, return the ds18b20 handle
             if (ds18b20_new_device_from_enumeration(&next_onewire_device, &ds_cfg, &ds18b20s[ds18b20_device_num].dev) == ESP_OK) {
                 ds18b20_get_device_address(ds18b20s[ds18b20_device_num].dev, &address);
+                ds18b20s[ds18b20_device_num].address = address;
                 ds18b20s[ds18b20_device_num].sensor_id = sensors_register("Temperature", "C");
                 ESP_LOGI(TAG, "Found a DS18B20[%d], address: %016llX", ds18b20_device_num, address);
                 ds18b20_device_num++;
@@ -93,4 +100,13 @@ void init_ds18b20(settings_t *settings) {
     
     // Start the weight reading task
     xTaskCreate(run_ds18b20, "run_ds18b20", configMINIMAL_STACK_SIZE * 5, settings, 5, NULL);
+}
+
+int get_ds18b20_devices(ds18b20_info_t *devices, int max_devices) {
+    int count = ds18b20_device_num < max_devices ? ds18b20_device_num : max_devices;
+    for (int i = 0; i < count; i++) {
+        devices[i].address = ds18b20s[i].address;
+        devices[i].sensor_id = ds18b20s[i].sensor_id;
+    }
+    return count;
 }
