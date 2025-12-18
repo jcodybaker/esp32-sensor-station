@@ -23,6 +23,7 @@
 #include "esp_mac.h"
 #include "esp_sntp.h"
 #include "esp_netif_sntp.h"
+#include "esp_timer.h"
 #include "lwip/ip_addr.h"
 
 #include "lwip/err.h"
@@ -66,15 +67,54 @@
 static const char *TAG = "wifi station";
 static const char *TAG_AP = "wifi ap";
 
+#define AP_WATCHDOG_TIMEOUT_US (60ULL * 60ULL * 1000000ULL)
+
 static char ap_ssid[32];
 
 static int s_retry_num = 0;
 static bool sta_configured = false;
 static bool ap_active = false;
 static bool ap_configured = false;
+static esp_timer_handle_t ap_watchdog_timer = NULL;
 extern bool g_ntp_initialized;
 
 void ntp_configure(void);
+
+static void ap_watchdog_callback(void *arg)
+{
+    ESP_LOGW(TAG_AP, "AP watchdog timeout reached, rebooting");
+    esp_restart();
+}
+
+static void ap_watchdog_stop(void)
+{
+    if (ap_watchdog_timer) {
+        esp_timer_stop(ap_watchdog_timer);
+    }
+}
+
+static void ap_watchdog_start(void)
+{
+    if (ap_watchdog_timer == NULL) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = &ap_watchdog_callback,
+            .name = "ap_watchdog",
+        };
+        esp_err_t err = esp_timer_create(&timer_args, &ap_watchdog_timer);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG_AP, "Failed to create AP watchdog timer: %s", esp_err_to_name(err));
+            return;
+        }
+    }
+
+    ap_watchdog_stop();
+    esp_err_t err = esp_timer_start_once(ap_watchdog_timer, AP_WATCHDOG_TIMEOUT_US);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_AP, "Failed to start AP watchdog timer: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG_AP, "AP watchdog timer started (1 hour)");
+    }
+}
 
 /* Initialize soft AP */
 void wifi_configure_softap(void)
@@ -150,6 +190,8 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                     wifi_configure_softap();
                     ESP_ERROR_CHECK(esp_wifi_start());
                     ap_active = true;
+                    esp_wifi_connect();
+                    ap_watchdog_start();
                 }
             }
             ESP_LOGI(TAG,"connect to the AP fail");
@@ -160,6 +202,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         if (ap_active) {
+            ap_watchdog_stop();
             ESP_ERROR_CHECK(esp_wifi_stop());
             esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
             if (err != ESP_OK) {
@@ -292,6 +335,7 @@ void wifi_init(settings_t *settings)
         wifi_configure_softap();
         ESP_ERROR_CHECK(esp_wifi_start() );
         ap_active = true;
+        ap_watchdog_start();
     }
 }
 
