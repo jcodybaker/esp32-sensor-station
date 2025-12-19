@@ -348,6 +348,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "<form action='/ota' method='POST'>\n"
         "<button type='submit'>Start OTA Update</button>\n"
         "</form>\n"
+        "<form action='/reboot' method='POST'>\n"
+        "<button type='submit' style='background: #ff9800;'>Reboot Device</button>\n"
+        "</form>\n"
         "<footer style='margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; text-align: center; color: #999; font-size: 12px;'>\n");
     
     snprintf(buffer, 1024,
@@ -929,6 +932,25 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t reboot_post_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "Reboot requested");
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_send(req, "Rebooting...", HTTPD_RESP_USE_STRLEN);
+    
+    // Schedule restart after a short delay to allow response to be sent
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    
+    return ESP_OK;
+}
+
+static httpd_uri_t reboot_post_uri = {
+    .uri       = "/reboot",
+    .method    = HTTP_POST,
+    .handler   = reboot_post_handler,
+    .user_ctx  = NULL
+};
+
 static httpd_uri_t settings_post_uri = {
     .uri       = "/settings",
     .method    = HTTP_POST,
@@ -1286,6 +1308,11 @@ esp_err_t settings_register(settings_t *settings, httpd_handle_t http_server) {
     err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_get_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering settings GET handler!", esp_err_to_name(err));
+        return err;
+    }
+    err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &reboot_post_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering reboot POST handler!", esp_err_to_name(err));
         return err;
     }
     return ESP_OK;

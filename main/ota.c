@@ -138,6 +138,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req) {
     }
     settings_t *settings = (settings_t *)req->user_ctx;
     return xTaskCreate(&ota_task, "ota_task", 8192, settings, 5, NULL);
+    httpd_resp_send(req, "OTA update started", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 static httpd_uri_t ota_post_uri = {
