@@ -319,23 +319,23 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                           "# TYPE ds18b20_temperature_celsius gauge\n");
         
         for (int i = 0; i < ds18b20_count; i++) {
-            bool available = false;
-            float temp_value = sensors_get_value(ds18b20_devices[i].sensor_id, &available);
-            
-            if (available) {
+            if (ds18b20_devices[i].last_updated > 0) {
                 // Get device name if configured
                 const char *device_name = settings_get_ds18b20_name(settings, ds18b20_devices[i].address);
                 char address_str[17];
                 snprintf(address_str, sizeof(address_str), "%016llx", ds18b20_devices[i].address);
                 
+                // Convert timestamp to milliseconds for Prometheus
+                int64_t timestamp_ms = (int64_t)ds18b20_devices[i].last_updated * 1000;
+                
                 if (device_name && strlen(device_name) > 0) {
                     offset += snprintf(response + offset, response_size - offset,
-                                      "ds18b20_temperature_celsius{hostname=\"%s\",device=\"%s\",address=\"%s\"} %.2f\n",
-                                      hostname, device_name, address_str, temp_value);
+                                      "ds18b20_temperature_celsius{hostname=\"%s\",device=\"%s\",address=\"%s\"} %.2f %lld\n",
+                                      hostname, device_name, address_str, ds18b20_devices[i].last_temperature_c, timestamp_ms);
                 } else {
                     offset += snprintf(response + offset, response_size - offset,
-                                      "ds18b20_temperature_celsius{hostname=\"%s\",address=\"%s\"} %.2f\n",
-                                      hostname, address_str, temp_value);
+                                      "ds18b20_temperature_celsius{hostname=\"%s\",address=\"%s\"} %.2f %lld\n",
+                                      hostname, address_str, ds18b20_devices[i].last_temperature_c, timestamp_ms);
                 }
             }
         }

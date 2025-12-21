@@ -24,6 +24,8 @@ typedef struct {
     ds18b20_device_handle_t dev;
     int sensor_id;
     uint64_t address;
+    float last_temperature_c;
+    time_t last_updated;
 } ds18b20_device_t;
 
 static ds18b20_device_t ds18b20s[EXAMPLE_ONEWIRE_MAX_DS18B20];
@@ -46,6 +48,10 @@ void run_ds18b20(void *pvParameters) {
                 sensors_update(ds18b20s[i].sensor_id, 0.0f, false);
                 continue;
             }
+            
+            // Store the raw Celsius temperature and timestamp
+            ds18b20s[i].last_temperature_c = temperature;
+            ds18b20s[i].last_updated = time(NULL);
             
             // Convert to Fahrenheit if configured
             float display_temp = temperature;
@@ -159,6 +165,8 @@ int get_ds18b20_devices(ds18b20_info_t *devices, int max_devices) {
     for (int i = 0; i < count; i++) {
         devices[i].address = ds18b20s[i].address;
         devices[i].sensor_id = ds18b20s[i].sensor_id;
+        devices[i].last_temperature_c = ds18b20s[i].last_temperature_c;
+        devices[i].last_updated = ds18b20s[i].last_updated;
     }
     return count;
 }
