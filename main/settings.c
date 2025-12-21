@@ -865,7 +865,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         if (err == ESP_OK) {
             settings->temp_use_fahrenheit = temp_use_fahrenheit;
             updated = true;
-            restar_needed = true;
+            restart_needed = true;
             ESP_LOGI(TAG, "Updated temp_use_fahrenheit to %d", temp_use_fahrenheit);
         } else {
             ESP_LOGE(TAG, "Failed to write temp_use_fahrenheit to NVS: %s", esp_err_to_name(err));
