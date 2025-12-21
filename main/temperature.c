@@ -46,22 +46,13 @@ void run_ds18b20(void *pvParameters) {
                 sensors_update(ds18b20s[i].sensor_id, 0.0f, false);
                 continue;
             }
-            
-            // Convert to Fahrenheit if configured
-            float display_temp = temperature;
-            const char *unit = "C";
-            if (device_settings && device_settings->temp_use_fahrenheit) {
-                display_temp = temperature * 9.0f / 5.0f + 32.0f;
-                unit = "F";
-            }
-            
             const char *name = device_settings ? settings_get_ds18b20_name(device_settings, ds18b20s[i].address) : NULL;
             if (name && strlen(name) > 0) {
-                ESP_LOGI(TAG, "temperature read from DS18B20 '%s' [%016llX]: %.2f%s", name, ds18b20s[i].address, display_temp, unit);
+                ESP_LOGI(TAG, "temperature read from DS18B20 '%s' [%016llX]: %.2fC", name, ds18b20s[i].address, temperature);
             } else {
-                ESP_LOGI(TAG, "temperature read from DS18B20[%d] [%016llX]: %.2f%s", i, ds18b20s[i].address, display_temp, unit);
+                ESP_LOGI(TAG, "temperature read from DS18B20[%d] [%016llX]: %.2fC", i, ds18b20s[i].address, temperature);
             }
-            sensors_update(ds18b20s[i].sensor_id, display_temp, true);
+            sensors_update(ds18b20s[i].sensor_id, temperature, true);
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
