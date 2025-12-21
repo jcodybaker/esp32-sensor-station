@@ -3,6 +3,8 @@
 #include "wifi.h"
 #include "bthome_observer.h"
 #include "bthome.h"
+#include "temperature.h"
+#include "sensors.h"
 #include "IQmathLib.h"
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -306,6 +308,38 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                       "# HELP uptime_seconds System uptime in seconds\n"
                       "# TYPE uptime_seconds counter\n"
                       "uptime_seconds{hostname=\"%s\"} %lld\n", hostname, uptime_seconds);
+    
+    // DS18B20 temperature metrics (always in Celsius for Prometheus)
+    ds18b20_info_t ds18b20_devices[EXAMPLE_ONEWIRE_MAX_DS18B20];
+    int ds18b20_count = get_ds18b20_devices(ds18b20_devices, EXAMPLE_ONEWIRE_MAX_DS18B20);
+    
+    if (ds18b20_count > 0) {
+        offset += snprintf(response + offset, response_size - offset,
+                          "# HELP ds18b20_temperature_celsius DS18B20 temperature sensor reading in Celsius\n"
+                          "# TYPE ds18b20_temperature_celsius gauge\n");
+        
+        for (int i = 0; i < ds18b20_count; i++) {
+            bool available = false;
+            float temp_value = sensors_get_value(ds18b20_devices[i].sensor_id, &available);
+            
+            if (available) {
+                // Get device name if configured
+                const char *device_name = settings_get_ds18b20_name(settings, ds18b20_devices[i].address);
+                char address_str[17];
+                snprintf(address_str, sizeof(address_str), "%016llx", ds18b20_devices[i].address);
+                
+                if (device_name && strlen(device_name) > 0) {
+                    offset += snprintf(response + offset, response_size - offset,
+                                      "ds18b20_temperature_celsius{hostname=\"%s\",device=\"%s\",address=\"%s\"} %.2f\n",
+                                      hostname, device_name, address_str, temp_value);
+                } else {
+                    offset += snprintf(response + offset, response_size - offset,
+                                      "ds18b20_temperature_celsius{hostname=\"%s\",address=\"%s\"} %.2f\n",
+                                      hostname, address_str, temp_value);
+                }
+            }
+        }
+    }
     
     // Add BTHome metrics from cache (properly grouped by metric family)
     if (settings->selected_bthome_object_ids_count > 0) {
