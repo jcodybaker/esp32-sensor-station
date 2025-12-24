@@ -1,9 +1,12 @@
 #include "pump.h"
 #include "http_server.h"
+#include "sensors.h"
 #include <esp_log.h>
 #include <stdlib.h>
 #include <string.h>
 #include "driver/i2c_master.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define PUMP_BUFFER_SIZE 41
 #define PUMP_PROCESSING_DELAY 300 // milliseconds
@@ -32,6 +35,8 @@ typedef struct {
     i2c_master_bus_handle_t bus_handle;
     i2c_master_dev_handle_t dev_handle;
     SemaphoreHandle_t xSemaphore;
+    int voltage_sensor_id;
+    int total_volume_sensor_id;
 } pump_context_t;
 
 
@@ -106,6 +111,49 @@ static esp_err_t pump_dispense_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static void pump_monitor_task(void *arg) {
+    pump_context_t *pump_ctx = (pump_context_t *)arg;
+    
+    while (1) {
+        // Query voltage
+        const char *voltage_response = pump_send_cmd(pump_ctx, "PV,?");
+        if (voltage_response != NULL) {
+            // Parse response format: "?PV,12.3"
+            float voltage = 0.0f;
+            if (sscanf(voltage_response, "?PV,%f", &voltage) == 1) {
+                sensors_update(pump_ctx->voltage_sensor_id, voltage, true);
+                ESP_LOGD(TAG, "Pump voltage: %.2f V", voltage);
+            } else {
+                ESP_LOGW(TAG, "Failed to parse voltage response: %s", voltage_response);
+                sensors_update(pump_ctx->voltage_sensor_id, 0.0f, false);
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to query pump voltage");
+            sensors_update(pump_ctx->voltage_sensor_id, 0.0f, false);
+        }
+        
+        // Query total volume
+        const char *volume_response = pump_send_cmd(pump_ctx, "TV,?");
+        if (volume_response != NULL) {
+            // Parse response format: "?TV,623.00"
+            float total_volume = 0.0f;
+            if (sscanf(volume_response, "?TV,%f", &total_volume) == 1) {
+                sensors_update(pump_ctx->total_volume_sensor_id, total_volume, true);
+                ESP_LOGD(TAG, "Pump total volume: %.2f ml", total_volume);
+            } else {
+                ESP_LOGW(TAG, "Failed to parse total volume response: %s", volume_response);
+                sensors_update(pump_ctx->total_volume_sensor_id, 0.0f, false);
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to query pump total volume");
+            sensors_update(pump_ctx->total_volume_sensor_id, 0.0f, false);
+        }
+        
+        // Wait 10 seconds before next update
+        vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+}
+
 static httpd_uri_t pump_dispense_uri = {
     .uri       = "/pump/dispense",
     .method    = HTTP_POST,
@@ -165,6 +213,32 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     if (pump_ctx->xSemaphore == NULL) {
         PUMP_ERROR_RETURN("Failed to create semaphore for pump");
         return;
+    }
+
+    // Register sensors
+    pump_ctx->voltage_sensor_id = sensors_register("Pump Voltage", "V");
+    if (pump_ctx->voltage_sensor_id < 0) {
+        ESP_LOGW(TAG, "Failed to register pump voltage sensor");
+    }
+    
+    pump_ctx->total_volume_sensor_id = sensors_register("Pump Total Volume", "ml");
+    if (pump_ctx->total_volume_sensor_id < 0) {
+        ESP_LOGW(TAG, "Failed to register pump total volume sensor");
+    }
+    
+    // Create monitoring task
+    BaseType_t task_created = xTaskCreate(
+        pump_monitor_task,
+        "pump_monitor",
+        4096,
+        pump_ctx,
+        5,
+        NULL
+    );
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create pump monitor task");
+    } else {
+        ESP_LOGI(TAG, "Pump monitor task started");
     }
 
     pump_dispense_uri.user_ctx = pump_ctx;
