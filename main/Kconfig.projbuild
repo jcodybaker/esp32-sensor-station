@@ -10,7 +10,7 @@ menu "Weight Sensor Configuration"
         help
             GPIO number connected to PD/SCK pin
 
-    config WEIGHT_DOUT_GPIO
+    config weight_dt_gpio
         int "DOUT GPIO number"
         default 5 if IDF_TARGET_ESP8266 || IDF_TARGET_ESP32C3
         default 5 if IDF_TARGET_ESP32C2 || IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C5 || IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32C61

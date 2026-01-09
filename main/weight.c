@@ -29,8 +29,8 @@ static void weight(void *pvParameters)
     settings_t *settings = (settings_t *)pvParameters;
     hx711_t dev =
     {
-        .dout = CONFIG_WEIGHT_DOUT_GPIO,
-        .pd_sck = CONFIG_WEIGHT_PD_SCK_GPIO,
+        .dout = settings->weight_dt_gpio,
+        .pd_sck = settings->weight_sck_gpio,
         .gain = HX711_GAIN_A_64
     };
 
@@ -142,7 +142,7 @@ uint32_t weight_get_latest_raw(bool *available) {
 
 void weight_init(settings_t *settings)
 {
-    if (settings->weight_dout_gpio < 0 || settings->weight_sck_gpio < 0) {
+    if (settings->weight_dt_gpio < 0 || settings->weight_sck_gpio < 0) {
         ESP_LOGW(TAG, "Weight HX711 GPIOs not configured, skipping weight initialization");
         return;
     }

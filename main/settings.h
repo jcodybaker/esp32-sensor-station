@@ -39,7 +39,7 @@ typedef struct {
     size_t ds18b20_names_count;        // Number of DS18B20 device names
     int8_t ds18b20_gpio;               // DS18B20 temperature sensor GPIO pin (-1 = disabled)
     int8_t ds18b20_pwr_gpio;           // DS18B20 power GPIO pin (-1 = disabled)
-    int8_t weight_dout_gpio;           // HX711 DOUT GPIO pin (-1 = disabled)
+    int8_t weight_dt_gpio;           // HX711 DOUT GPIO pin (-1 = disabled)
     int8_t weight_sck_gpio;            // HX711 SCK GPIO pin (-1 = disabled)
     int8_t pump_scl_gpio;              // Pump I2C SCL GPIO pin (-1 = disabled)
     int8_t pump_sda_gpio;              // Pump I2C SDA GPIO pin (-1 = disabled)

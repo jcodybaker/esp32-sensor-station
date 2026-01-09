@@ -138,7 +138,7 @@ static void pump_monitor_task(void *arg) {
             // Parse response format: "?TV,623.00"
             float total_volume = 0.0f;
             if (sscanf(volume_response, "?TV,%f", &total_volume) == 1) {
-                sensors_update(pump_ctx->total_volume_sensor_id, total_volume, true);
+                sensors_update_with_link(pump_ctx->total_volume_sensor_id, total_volume, true, "/pump/dispense", "Dispense");
                 ESP_LOGD(TAG, "Pump total volume: %.2f ml", total_volume);
             } else {
                 ESP_LOGW(TAG, "Failed to parse total volume response: %s", volume_response);
@@ -154,10 +154,243 @@ static void pump_monitor_task(void *arg) {
     }
 }
 
+static esp_err_t pump_calibrate_start_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/html");
+    
+    httpd_resp_sendstr_chunk(req,
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head>\n"
+        "<title>Pump Calibration</title>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+        "<style>\n"
+        "body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; }\n"
+        "h1 { color: #333; }\n"
+        ".info-box { background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #2196F3; }\n"
+        "button { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 10px; }\n"
+        "button:hover { background: #45a049; }\n"
+        "a { display: inline-block; margin: 10px; color: #666; text-decoration: none; }\n"
+        "a:hover { text-decoration: underline; }\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<h1>Pump Calibration</h1>\n"
+        "<div class='info-box'>\n"
+        "<h2>Ready to Calibrate</h2>\n"
+        "<p>The pump will dispense <strong>10 ml</strong> of liquid.</p>\n"
+        "<p>Please have a graduated cylinder or measuring container ready.</p>\n"
+        "<p>After dispensing, you will be asked to enter the actual amount dispensed.</p>\n"
+        "</div>\n"
+        "<form method='POST' action='/pump/calibrate/dispense'>\n"
+        "<button type='submit'>Start Calibration (Dispense 10ml)</button>\n"
+        "</form>\n"
+        "<a href='/settings'>Cancel</a>\n"
+        "</body>\n"
+        "</html>\n");
+    
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t pump_calibrate_dispense_handler(httpd_req_t *req) {
+    pump_context_t *pump_ctx = (pump_context_t*)(req->user_ctx);
+    
+    // Dispense 10ml
+    ESP_LOGI(TAG, "Starting calibration - dispensing 10ml");
+    const char *response = pump_send_cmd(pump_ctx, "D,10");
+    if (response == NULL) {
+        const char *error = pump_get_last_error();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/html");
+        
+        char error_html[512];
+        snprintf(error_html, sizeof(error_html),
+            "<!DOCTYPE html><html><head><title>Error</title></head><body>"
+            "<h1>Calibration Error</h1><p>Failed to dispense: %s</p>"
+            "<a href='/pump/calibrate'>Try Again</a> | <a href='/settings'>Back to Settings</a>"
+            "</body></html>",
+            error ? error : "Unknown error");
+        httpd_resp_send(req, error_html, HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // Redirect to input form
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/pump/calibrate/input");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t pump_calibrate_input_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/html");
+    
+    httpd_resp_sendstr_chunk(req,
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head>\n"
+        "<title>Pump Calibration - Input</title>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+        "<style>\n"
+        "body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; }\n"
+        "h1 { color: #333; }\n"
+        ".info-box { background: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #ffc107; }\n"
+        "form { background: #f4f4f4; padding: 20px; border-radius: 8px; margin: 20px 0; }\n"
+        "label { display: block; margin: 15px 0 5px 0; font-weight: bold; }\n"
+        "input[type='number'] { width: 100%; padding: 10px; font-size: 18px; border: 2px solid #ddd; border-radius: 4px; box-sizing: border-box; }\n"
+        "button { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 10px; }\n"
+        "button:hover { background: #45a049; }\n"
+        "a { display: inline-block; margin: 10px; color: #666; text-decoration: none; }\n"
+        "a:hover { text-decoration: underline; }\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<h1>Pump Calibration</h1>\n"
+        "<div class='info-box'>\n"
+        "<p>The pump has dispensed the calibration volume.</p>\n"
+        "<p>Please measure the <strong>actual amount</strong> that was dispensed.</p>\n"
+        "</div>\n"
+        "<form method='POST' action='/pump/calibrate/submit'>\n"
+        "<label for='actual_ml'>Actual Volume Dispensed (ml):</label>\n"
+        "<input type='number' id='actual_ml' name='actual_ml' step='0.01' min='0.1' max='20' required autofocus>\n"
+        "<button type='submit'>Submit Calibration</button>\n"
+        "</form>\n"
+        "<a href='/settings'>Cancel</a>\n"
+        "</body>\n"
+        "</html>\n");
+    
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t pump_calibrate_submit_handler(httpd_req_t *req) {
+    pump_context_t *pump_ctx = (pump_context_t*)(req->user_ctx);
+    
+    // Read POST data
+    char buf[100];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, "Failed to read request body", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    buf[ret] = '\0';
+    
+    // Parse actual_ml parameter
+    char actual_ml_str[16] = {0};
+    char *param_start = strstr(buf, "actual_ml=");
+    if (param_start) {
+        param_start += strlen("actual_ml=");
+        char *param_end = strchr(param_start, '&');
+        size_t param_len = param_end ? (size_t)(param_end - param_start) : strlen(param_start);
+        if (param_len < sizeof(actual_ml_str)) {
+            strncpy(actual_ml_str, param_start, param_len);
+        }
+    }
+    
+    if (actual_ml_str[0] == '\0') {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, "Missing actual_ml parameter", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    float actual_ml = atof(actual_ml_str);
+    if (actual_ml < 0.1 || actual_ml > 20.0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, "Invalid volume value", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // Send calibration command
+    char cal_cmd[32];
+    snprintf(cal_cmd, sizeof(cal_cmd), "CAL,%.2f", actual_ml);
+    ESP_LOGI(TAG, "Sending calibration command: %s", cal_cmd);
+    
+    const char *response = pump_send_cmd(pump_ctx, cal_cmd);
+    if (response == NULL) {
+        const char *error = pump_get_last_error();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/html");
+        
+        char error_html[512];
+        snprintf(error_html, sizeof(error_html),
+            "<!DOCTYPE html><html><head><title>Error</title></head><body>"
+            "<h1>Calibration Error</h1><p>Failed to calibrate: %s</p>"
+            "<a href='/pump/calibrate'>Try Again</a> | <a href='/settings'>Back to Settings</a>"
+            "</body></html>",
+            error ? error : "Unknown error");
+        httpd_resp_send(req, error_html, HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // Success page
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/html");
+    
+    char success_html[1024];
+    snprintf(success_html, sizeof(success_html),
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head>\n"
+        "<title>Calibration Complete</title>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
+        "<style>\n"
+        "body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; }\n"
+        "h1 { color: #333; }\n"
+        ".success-box { background: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #28a745; }\n"
+        "a { display: inline-block; margin: 10px; padding: 12px 30px; background: #4CAF50; color: white; text-decoration: none; border-radius: 4px; }\n"
+        "a:hover { background: #45a049; }\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<h1>Calibration Complete!</h1>\n"
+        "<div class='success-box'>\n"
+        "<p>Pump has been calibrated with actual volume: <strong>%.2f ml</strong></p>\n"
+        "<p>Response: %s</p>\n"
+        "</div>\n"
+        "<a href='/'>Home</a>\n"
+        "<a href='/settings'>Settings</a>\n"
+        "</body>\n"
+        "</html>\n",
+        actual_ml, response);
+    
+    httpd_resp_send(req, success_html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static httpd_uri_t pump_dispense_uri = {
     .uri       = "/pump/dispense",
     .method    = HTTP_POST,
     .handler   = pump_dispense_handler,
+    .user_ctx  = NULL
+};
+
+static httpd_uri_t pump_calibrate_start_uri = {
+    .uri       = "/pump/calibrate",
+    .method    = HTTP_GET,
+    .handler   = pump_calibrate_start_handler,
+    .user_ctx  = NULL
+};
+
+static httpd_uri_t pump_calibrate_dispense_uri = {
+    .uri       = "/pump/calibrate/dispense",
+    .method    = HTTP_POST,
+    .handler   = pump_calibrate_dispense_handler,
+    .user_ctx  = NULL
+};
+
+static httpd_uri_t pump_calibrate_input_uri = {
+    .uri       = "/pump/calibrate/input",
+    .method    = HTTP_GET,
+    .handler   = pump_calibrate_input_handler,
+    .user_ctx  = NULL
+};
+
+static httpd_uri_t pump_calibrate_submit_uri = {
+    .uri       = "/pump/calibrate/submit",
+    .method    = HTTP_POST,
+    .handler   = pump_calibrate_submit_handler,
     .user_ctx  = NULL
 };
 
@@ -202,18 +435,19 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
         PUMP_ERROR_RETURN("Failed to add I2C device to bus");
         return;
     }
+
+    pump_ctx->xSemaphore = xSemaphoreCreateMutex();
+    if (pump_ctx->xSemaphore == NULL) {
+        PUMP_ERROR_RETURN("Failed to create semaphore for pump");
+        return;
+    }
+
     const char *response = pump_send_cmd(pump_ctx, "I");
     if (response == NULL) {
         PUMP_ERROR_RETURN("Failed to communicate with pump during initialization");
         return;
     }
     ESP_LOGI(TAG, "Pump initialized successfully, firmware version: %s", response);
-    
-    pump_ctx->xSemaphore = xSemaphoreCreateMutex();
-    if (pump_ctx->xSemaphore == NULL) {
-        PUMP_ERROR_RETURN("Failed to create semaphore for pump");
-        return;
-    }
 
     // Register sensors
     pump_ctx->voltage_sensor_id = sensors_register("Pump Voltage", "V");
@@ -242,13 +476,41 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     }
 
     pump_dispense_uri.user_ctx = pump_ctx;
-    // Register HTTP handler
+    pump_calibrate_start_uri.user_ctx = pump_ctx;
+    pump_calibrate_dispense_uri.user_ctx = pump_ctx;
+    pump_calibrate_input_uri.user_ctx = pump_ctx;
+    pump_calibrate_submit_uri.user_ctx = pump_ctx;
+    
+    // Register HTTP handlers
     esp_err_t err_http = httpd_register_uri_handler_with_basic_auth(settings, server, &pump_dispense_uri);
     if (err_http != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register HTTP handler: %s", esp_err_to_name(err_http));
+        ESP_LOGE(TAG, "Failed to register pump dispense handler: %s", esp_err_to_name(err_http));
     } else {
         ESP_LOGI(TAG, "Registered pump dispense HTTP handler at /pump/dispense");
     }
+    
+    err_http = httpd_register_uri_handler_with_basic_auth(settings, server, &pump_calibrate_start_uri);
+    if (err_http != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register calibration start handler: %s", esp_err_to_name(err_http));
+    }
+    
+    err_http = httpd_register_uri_handler_with_basic_auth(settings, server, &pump_calibrate_dispense_uri);
+    if (err_http != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register calibration dispense handler: %s", esp_err_to_name(err_http));
+    }
+    
+    err_http = httpd_register_uri_handler_with_basic_auth(settings, server, &pump_calibrate_input_uri);
+    if (err_http != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register calibration input handler: %s", esp_err_to_name(err_http));
+    }
+    
+    err_http = httpd_register_uri_handler_with_basic_auth(settings, server, &pump_calibrate_submit_uri);
+    if (err_http != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register calibration submit handler: %s", esp_err_to_name(err_http));
+    } else {
+        ESP_LOGI(TAG, "Registered pump calibration handlers");
+    }
+    
     return;
 }
 

@@ -134,7 +134,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "</head>\n"
         "<body>\n"
         "<h1>Weight Station Settings</h1>\n"
-        "<a href='/'>Home</a><br>\n"
+        "<a href='/'>Home</a> | <a href='/pump/calibrate'>Calibrate Pump</a><br>\n"
         "<div id='message' class='message'></div>\n"
         "<form id='settingsForm'>\n"
         "<label for='password'>Password:</label>\n"
@@ -193,11 +193,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->ds18b20_pwr_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
     
-    // Send weight_dout_gpio with current value
+    // Send weight_dt_gpio with current value
     snprintf(buffer, 1024,
-        "<label for='weight_dout_gpio'>Weight (HX711) DOUT GPIO Pin (-1 = disabled, suggested: 32):</label>\n"
-        "<input type='number' id='weight_dout_gpio' name='weight_dout_gpio' value='%d' min='-1' max='39'>\n",
-        settings->weight_dout_gpio);
+        "<label for='weight_dt_gpio'>Weight (HX711) DOUT GPIO Pin (-1 = disabled, suggested: 32):</label>\n"
+        "<input type='number' id='weight_dt_gpio' name='weight_dt_gpio' value='%d' min='-1' max='39'>\n",
+        settings->weight_dt_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send weight_sck_gpio with current value
@@ -224,8 +224,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     // Send pump_i2c_addr with current value
     snprintf(buffer, 1024,
-        "<label for='pump_i2c_addr'>Pump I2C Device Address (hex):</label>\n"
-        "<input type='number' id='pump_i2c_addr' name='pump_i2c_addr' value='0x%02X' min='0' max='127'>\n",
+        "<label for='pump_i2c_addr'>Pump I2C Device Address:</label>\n"
+        "<input type='number' id='pump_i2c_addr' name='pump_i2c_addr' value='%d' min='0' max='127'>\n",
         settings->pump_i2c_addr);
     httpd_resp_sendstr_chunk(req, buffer);
     
@@ -793,21 +793,21 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
     
-    // Check and update weight_dout_gpio
-    if (httpd_query_key_value(query_buf, "weight_dout_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
-        int8_t weight_dout_gpio = (int8_t)atoi(param_buf);
-        if (weight_dout_gpio == settings->weight_dout_gpio) {
+    // Check and update weight_dt_gpio
+    if (httpd_query_key_value(query_buf, "weight_dt_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t weight_dt_gpio = (int8_t)atoi(param_buf);
+        if (weight_dt_gpio == settings->weight_dt_gpio) {
             ESP_LOGI(TAG, "Weight DOUT GPIO unchanged");
             param_buf[0] = '\0'; // Clear to avoid updating
         }
         if (strlen(param_buf) > 0) {
-            err = nvs_set_i8(settings_handle, "weight_dout_gpio", weight_dout_gpio);
+            err = nvs_set_i8(settings_handle, "weight_dt_gpio", weight_dt_gpio);
             if (err == ESP_OK) {
-                settings->weight_dout_gpio = weight_dout_gpio;
+                settings->weight_dt_gpio = weight_dt_gpio;
                 updated = true;
-                ESP_LOGI(TAG, "Updated weight_dout_gpio to %d", weight_dout_gpio);
+                ESP_LOGI(TAG, "Updated weight_dt_gpio to %d", weight_dt_gpio);
             } else {
-                ESP_LOGE(TAG, "Failed to write weight_dout_gpio to NVS: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to write weight_dt_gpio to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
         }
@@ -1429,7 +1429,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
 static esp_err_t reboot_post_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "Reboot requested");
     httpd_resp_set_status(req, HTTPD_200);
-    httpd_resp_send(req, "Rebooting...", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, "<html><head><meta http-equiv=\"refresh\" content=\"5; url=/\"></head><body>Rebooting...</body></html>", HTTPD_RESP_USE_STRLEN);
     
     // Schedule restart after a short delay to allow response to be sent
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1473,7 +1473,7 @@ esp_err_t settings_init(settings_t *settings)
     settings->mac_filters_count = 0;
     settings->ds18b20_gpio = -1;
     settings->ds18b20_pwr_gpio = -1;
-    settings->weight_dout_gpio = -1;
+    settings->weight_dt_gpio = -1;
     settings->weight_sck_gpio = -1;
     settings->pump_scl_gpio = -1;
     settings->pump_sda_gpio = -1;
@@ -1799,20 +1799,20 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
-    ESP_LOGI(TAG, "Reading 'weight_dout_gpio' from NVS...");
-    int8_t weight_dout_gpio_value;
-    err = nvs_get_i8(settings_handle, "weight_dout_gpio", &weight_dout_gpio_value);
+    ESP_LOGI(TAG, "Reading 'weight_dt_gpio' from NVS...");
+    int8_t weight_dt_gpio_value;
+    err = nvs_get_i8(settings_handle, "weight_dt_gpio", &weight_dt_gpio_value);
     switch (err) {
         case ESP_OK:
-            settings->weight_dout_gpio = weight_dout_gpio_value;
-            ESP_LOGI(TAG, "Read 'weight_dout_gpio' = %d", settings->weight_dout_gpio);
+            settings->weight_dt_gpio = weight_dt_gpio_value;
+            ESP_LOGI(TAG, "Read 'weight_dt_gpio' = %d", settings->weight_dt_gpio);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->weight_dout_gpio = -1;  // Disabled by default
-            ESP_LOGI(TAG, "No value for 'weight_dout_gpio'; using default = %d (disabled)", settings->weight_dout_gpio);
+            settings->weight_dt_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'weight_dt_gpio'; using default = %d (disabled)", settings->weight_dt_gpio);
             break;
         default:
-            ESP_LOGE(TAG, "Error (%s) reading weight_dout_gpio!", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Error (%s) reading weight_dt_gpio!", esp_err_to_name(err));
             return err;
     }
 
@@ -1893,7 +1893,7 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'pump_dispense_ml' = %d", settings->pump_dispense_ml);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->pump_dispense_ml = 100;  // Default 100ml
+            settings->pump_dispense_ml = CONFIG_PUMP_DEFAULT_DISPENSE_ML;
             ESP_LOGI(TAG, "No value for 'pump_dispense_ml'; using default = %d", settings->pump_dispense_ml);
             break;
         default:
@@ -1901,7 +1901,7 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
-    ESP_LOGI(TAG, "\\nReading 'mac_filters' from NVS...");
+    ESP_LOGI(TAG, "Reading 'mac_filters' from NVS...");
     blob_size = 0;
     err = nvs_get_blob(settings_handle, "mac_filters", NULL, &blob_size);
     switch (err) {
@@ -1948,7 +1948,7 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
-    ESP_LOGI(TAG, "\\nReading 'ds18b20_names' from NVS...");
+    ESP_LOGI(TAG, "Reading 'ds18b20_names' from NVS...");
     blob_size = 0;
     err = nvs_get_blob(settings_handle, "ds18b20_names", NULL, &blob_size);
     switch (err) {
