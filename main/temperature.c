@@ -120,6 +120,9 @@ void init_ds18b20(settings_t *settings) {
     onewire_device_t next_onewire_device;
     esp_err_t search_result = ESP_OK;
 
+    // Reset the bus before starting device search.  This may be necessary after a reboot.
+    onewire_bus_reset(bus);
+
     // create 1-wire device iterator, which is used for device search
     ESP_ERROR_CHECK(onewire_new_device_iter(bus, &iter));
     ESP_LOGI(TAG, "Device iterator created, start searching...");
