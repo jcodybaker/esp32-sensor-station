@@ -98,7 +98,21 @@ void init_ds18b20(settings_t *settings) {
         // Wait a moment for the sensors to power up
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    
+
+    // hard reset the bus
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << settings->ds18b20_gpio),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+    gpio_set_level(settings->ds18b20_gpio, 0);
+    ESP_LOGI(TAG, "DS18B20 reset GPIO %d set to 0", settings->ds18b20_gpio);
+    // Wait a moment for the sensors to power up
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     // Store settings pointer for later use
     device_settings = settings;
     
@@ -119,9 +133,6 @@ void init_ds18b20(settings_t *settings) {
     onewire_device_iter_handle_t iter = NULL;
     onewire_device_t next_onewire_device;
     esp_err_t search_result = ESP_OK;
-
-    // Reset the bus before starting device search.  This may be necessary after a reboot.
-    onewire_bus_reset(bus);
 
     // create 1-wire device iterator, which is used for device search
     ESP_ERROR_CHECK(onewire_new_device_iter(bus, &iter));
