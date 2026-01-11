@@ -62,6 +62,7 @@ void run_ds18b20(void *pvParameters) {
                 unit = "F";
                 sensors_update(ds18b20s[i].sensor_id_f, display_temp, true);
             }
+            sensors_update(ds18b20s[i].sensor_id_c, temperature, true);
             
             const char *name = device_settings ? settings_get_ds18b20_name(device_settings, ds18b20s[i].address) : NULL;
             if (name && strlen(name) > 0) {
