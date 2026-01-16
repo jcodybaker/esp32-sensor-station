@@ -37,6 +37,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     
     settings_t *settings = malloc(sizeof(settings_t));
+    atomic_fetch_add(&malloc_count_main, 1);
     ESP_LOGI("main", "app_main settings ptr %p", settings);
 
     ESP_ERROR_CHECK(settings_init(settings));

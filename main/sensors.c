@@ -1,5 +1,6 @@
 #include "sensors.h"
 #include "settings.h"
+#include "metrics.h"
 #include <esp_log.h>
 #include <esp_http_server.h>
 #include <esp_app_format.h>
@@ -133,6 +134,7 @@ static esp_err_t sensors_display_handler(httpd_req_t *req) {
     
     // Create a buffer for the complete HTML with hostname
     char *html_with_hostname = malloc(strlen(sensors_display_html) + strlen(hostname) + 32);
+    atomic_fetch_add(&malloc_count_sensors, 1);
     if (html_with_hostname == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -158,12 +160,14 @@ static esp_err_t sensors_display_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
     httpd_resp_send(req, html_with_hostname, strlen(html_with_hostname));
     free(html_with_hostname);
+    atomic_fetch_add(&free_count_sensors, 1);
     return ESP_OK;
 }
 
 static esp_err_t sensors_data_handler(httpd_req_t *req) {
     // Build JSON response with all sensors
     char *json_buf = malloc(2048); // Allocate buffer for JSON
+    atomic_fetch_add(&malloc_count_sensors, 1);
     if (json_buf == NULL) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -218,6 +222,7 @@ static esp_err_t sensors_data_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
     httpd_resp_send(req, json_buf, strlen(json_buf));
     free(json_buf);
+    atomic_fetch_add(&free_count_sensors, 1);
     return ESP_OK;
 }
 

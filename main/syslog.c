@@ -10,6 +10,7 @@
 #include "esp_netif.h"
 #include "syslog.h"
 #include "settings.h"
+#include "metrics.h"
 
 static const char *TAG = "syslog";
 
@@ -57,6 +58,7 @@ static int custom_vprintf(const char *fmt, va_list args) {
     if (syslog_enabled && syslog_queue && fmt) {
         // Allocate message on heap
         char *message = malloc(SYSLOG_MAX_MSG_LEN);
+        atomic_fetch_add(&malloc_count_syslog, 1);
         if (!message) {
             return ret;  // Skip if allocation fails
         }
@@ -87,6 +89,7 @@ static int custom_vprintf(const char *fmt, va_list args) {
         if (xQueueSend(syslog_queue, &msg, 0) != pdTRUE) {
             // Queue full, free the message
             free(message);
+            atomic_fetch_add(&free_count_syslog, 1);
         }
     }
 
@@ -104,6 +107,7 @@ static void syslog_task(void *pvParameters) {
             if (!syslog_enabled || !g_settings || !g_settings->syslog_server || 
                 strlen(g_settings->syslog_server) == 0) {
                 free(msg.message);  // Free the message
+                atomic_fetch_add(&free_count_syslog, 1);
                 continue;
             }
             
@@ -113,6 +117,7 @@ static void syslog_task(void *pvParameters) {
                 if (syslog_sock < 0) {
                     // ESP_LOGE(TAG, "Failed to create socket: errno %d", errno);
                     free(msg.message);  // Free the message
+                    atomic_fetch_add(&free_count_syslog, 1);
                     vTaskDelay(pdMS_TO_TICKS(1000));
                     continue;
                 }
@@ -124,6 +129,7 @@ static void syslog_task(void *pvParameters) {
                     close(syslog_sock);
                     syslog_sock = -1;
                     free(msg.message);  // Free the message
+                    atomic_fetch_add(&free_count_syslog, 1);
                     vTaskDelay(pdMS_TO_TICKS(5000));
                     continue;
                 }
@@ -151,6 +157,7 @@ static void syslog_task(void *pvParameters) {
             
             // Free the message after sending (or attempting to send)
             free(msg.message);
+            atomic_fetch_add(&free_count_syslog, 1);
             
             if (sent < 0) {
                 // ESP_LOGE(TAG, "Failed to send syslog message: errno %d", errno);
@@ -239,6 +246,7 @@ void syslog_deinit(void) {
         // Drain the queue and free any remaining messages
         while (xQueueReceive(syslog_queue, &msg, 0) == pdTRUE) {
             free(msg.message);
+            atomic_fetch_add(&free_count_syslog, 1);
         }
         vQueueDelete(syslog_queue);
         syslog_queue = NULL;

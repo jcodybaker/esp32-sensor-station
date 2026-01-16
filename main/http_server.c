@@ -7,6 +7,7 @@
 #include "esp_tls_crypto.h"
 #include "esp_tls.h"
 #include "settings.h"
+#include "metrics.h"
 
 
 // Shamelessly borrowed from https://github.com/espressif/esp-idf/blob/v5.5.1/examples/protocols/http_server/simple/main/main.c
@@ -44,11 +45,13 @@ static char *http_auth_basic(const char *username, const char *password)
      * 1: Number of bytes for a reserved which be used to fill zero
     */
     digest = calloc(1, 6 + n + 1);
+    atomic_fetch_add(&malloc_count_http_server, 1);
     if (digest) {
         strcpy(digest, "Basic ");
         esp_crypto_base64_encode((unsigned char *)digest + 6, n, &out, (const unsigned char *)user_info, strlen(user_info));
     }
     free(user_info);
+    atomic_fetch_add(&free_count_http_server, 1);
     return digest;
 }
 
@@ -63,6 +66,7 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
     buf_len = httpd_req_get_hdr_value_len(req, "Authorization") + 1;
     if (buf_len > 1) {
         buf = calloc(1, buf_len);
+        atomic_fetch_add(&malloc_count_http_server, 1);
         if (!buf) {
             ESP_LOGE(TAG, "No enough memory for basic authorization");
             return ESP_ERR_NO_MEM;
@@ -81,6 +85,7 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
         if (!auth_credentials) {
             ESP_LOGE(TAG, "No enough memory for basic authorization credentials");
             free(buf);
+            atomic_fetch_add(&free_count_http_server, 1);
             return ESP_ERR_NO_MEM;
         }
 
@@ -94,11 +99,15 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
             ESP_LOGI(TAG, "Authenticated!");
             req->user_ctx = wrapper->user_ctx;
             free(auth_credentials);
+            atomic_fetch_add(&free_count_http_server, 1);
             free(buf);
+            atomic_fetch_add(&free_count_http_server, 1);
             return wrapper->handler(req);
         }
         free(auth_credentials);
+        atomic_fetch_add(&free_count_http_server, 1);
         free(buf);
+        atomic_fetch_add(&free_count_http_server, 1);
     } else {
         ESP_LOGE(TAG, "No auth header received");
         httpd_resp_set_status(req, HTTPD_401);
@@ -115,6 +124,7 @@ esp_err_t httpd_register_uri_handler_with_basic_auth(void *settings_ptr, httpd_h
     settings_t *settings = (settings_t *)settings_ptr;
     ESP_LOGI(TAG, "httpd_register_uri_handler_with_basic_auth settings ptr %p", settings);
     basic_auth_wrap_t *wrapper = malloc(sizeof(basic_auth_wrap_t));
+    atomic_fetch_add(&malloc_count_http_server, 1);
     if (!wrapper) {
         ESP_LOGE(TAG, "No enough memory for basic auth wrapper");
         return ESP_ERR_NO_MEM;
@@ -125,9 +135,11 @@ esp_err_t httpd_register_uri_handler_with_basic_auth(void *settings_ptr, httpd_h
     wrapper->settings = settings;
 
     httpd_uri_t *wrapped_uri_handler = malloc(sizeof(httpd_uri_t));
+    atomic_fetch_add(&malloc_count_http_server, 1);
     if (!wrapped_uri_handler) {
         ESP_LOGE(TAG, "No enough memory for wrapped URI handler");
         free(wrapper);
+        atomic_fetch_add(&free_count_http_server, 1);
         return ESP_ERR_NO_MEM;
     }
     memcpy(wrapped_uri_handler, uri_handler, sizeof(httpd_uri_t));

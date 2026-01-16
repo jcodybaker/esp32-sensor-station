@@ -1,6 +1,7 @@
 #include "pump.h"
 #include "http_server.h"
 #include "sensors.h"
+#include "metrics.h"
 #include <esp_log.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,12 +51,14 @@ static esp_err_t pump_dispense_ml_param_parser(httpd_req_t *req, int *out_amount
     }
 
     char *buf = malloc(buf_len);
+    atomic_fetch_add(&malloc_count_pump, 1);
     if (!buf) {
         return ESP_ERR_NO_MEM;
     }
 
     if (httpd_req_get_url_query_str(req, buf, buf_len) != ESP_OK) {
         free(buf);
+        atomic_fetch_add(&free_count_pump, 1);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "Failed to get query string", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
@@ -402,6 +405,7 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
 
     ESP_LOGI(TAG, "Initializing pump on SCL GPIO %d, SDA GPIO %d", settings->pump_scl_gpio, settings->pump_sda_gpio);
     pump_context_t *pump_ctx = malloc(sizeof(pump_context_t));
+    atomic_fetch_add(&malloc_count_pump, 1);
     if (!pump_ctx) {
         PUMP_ERROR_RETURN("Failed to allocate memory for pump");
         return;

@@ -18,6 +18,7 @@
 #include "bthome.h"
 #include "temperature.h"
 #include "pump.h"
+#include "metrics.h"
 
 static const char *TAG = "settings";
 
@@ -40,6 +41,7 @@ static char *url_encode(const char *src) {
     }
     
     char *encoded = malloc(len + 1);
+    atomic_fetch_add(&malloc_count_settings, 1);
     if (!encoded) return NULL;
     
     char *dst = encoded;
@@ -104,6 +106,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     // Allocate buffers on heap to avoid stack overflow
     char *buffer = malloc(1024);
+    atomic_fetch_add(&malloc_count_settings, 1);
     if (!buffer) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_ERR_NO_MEM;
@@ -160,6 +163,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         encoded_hostname ? encoded_hostname : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_hostname);
+    atomic_fetch_add(&free_count_settings, 1);
 
     // Send update_url with current value
     char *encoded_update_url = url_encode(settings->update_url);
@@ -170,6 +174,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         encoded_update_url ? encoded_update_url : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_update_url);    
+    atomic_fetch_add(&free_count_settings, 1);
 
     // Send timezone with current value
     char *encoded_timezone = url_encode(settings->timezone);
@@ -179,6 +184,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         encoded_timezone ? encoded_timezone : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_timezone);
+    atomic_fetch_add(&free_count_settings, 1);
 
     // Send temperature unit checkbox
     snprintf(buffer, 1024,
@@ -199,6 +205,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         encoded_wifi_ssid ? encoded_wifi_ssid : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_wifi_ssid);
+    atomic_fetch_add(&free_count_settings, 1);
     
     // Send wifi_password and checkbox
     snprintf(buffer, 1024,
@@ -223,6 +230,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         encoded_syslog_server ? encoded_syslog_server : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_syslog_server);
+    atomic_fetch_add(&free_count_settings, 1);
     
     // Send syslog_port with current value
     snprintf(buffer, 1024,
@@ -362,6 +370,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
             display_index, addr_str, display_index, encoded_name ? encoded_name : "");
         httpd_resp_sendstr_chunk(req, buffer);
         free(encoded_name);
+        atomic_fetch_add(&free_count_settings, 1);
         display_index++;
     }
     
@@ -390,6 +399,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
                 display_index, addr_str, display_index, encoded_name ? encoded_name : "");
             httpd_resp_sendstr_chunk(req, buffer);
             free(encoded_name);
+            atomic_fetch_add(&free_count_settings, 1);
             display_index++;
         }
     }
@@ -493,6 +503,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
             i, mac_str, i, encoded_name ? encoded_name : "", i, settings->mac_filters[i].enabled ? " checked" : "");
         httpd_resp_sendstr_chunk(req, buffer);
         free(encoded_name);
+        atomic_fetch_add(&free_count_settings, 1);
     }
     
     httpd_resp_sendstr_chunk(req,
@@ -617,6 +628,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     
     httpd_resp_sendstr_chunk(req, NULL);
     free(buffer);
+    atomic_fetch_add(&free_count_settings, 1);
     return ESP_OK;
 }
 
@@ -634,6 +646,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     if (content_len > 0) {
         // Allocate buffer for POST data
         query_buf = malloc(content_len + 1);
+        atomic_fetch_add(&malloc_count_settings, 1);
         if (query_buf == NULL) {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
             return ESP_ERR_NO_MEM;
@@ -643,6 +656,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         int ret = httpd_req_recv(req, query_buf, content_len);
         if (ret <= 0) {
             free(query_buf);
+            atomic_fetch_add(&free_count_settings, 1);
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
                 httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request timeout");
             } else {
@@ -660,6 +674,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
         
         query_buf = malloc(query_len + 1);
+        atomic_fetch_add(&malloc_count_settings, 1);
         if (query_buf == NULL) {
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
             return ESP_ERR_NO_MEM;
@@ -667,6 +682,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         
         if (httpd_req_get_url_query_str(req, query_buf, query_len + 1) != ESP_OK) {
             free(query_buf);
+            atomic_fetch_add(&free_count_settings, 1);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to parse query string");
             return ESP_FAIL;
         }
@@ -677,6 +693,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     err = nvs_open("settings", NVS_READWRITE, &settings_handle);
     if (err != ESP_OK) {
         free(query_buf);
+        atomic_fetch_add(&free_count_settings, 1);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open NVS");
         return err;
     }
@@ -697,6 +714,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->password != NULL) {
                     free(settings->password);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->password = strdup(decoded_param);
                 updated = true;
@@ -719,6 +737,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->update_url != NULL) {
                     free(settings->update_url);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->update_url = strdup(decoded_param);
                 updated = true;
@@ -960,6 +979,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->wifi_ssid != NULL) {
                     free(settings->wifi_ssid);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->wifi_ssid = strdup(decoded_param);
                 updated = true;
@@ -982,6 +1002,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->wifi_password != NULL) {
                     free(settings->wifi_password);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->wifi_password = strdup(decoded_param);
                 updated = true;
@@ -1042,6 +1063,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->syslog_server != NULL) {
                     free(settings->syslog_server);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->syslog_server = strdup(decoded_param);
                 updated = true;
@@ -1083,6 +1105,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->hostname != NULL) {
                     free(settings->hostname);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->hostname = strdup(decoded_param);
                 updated = true;
@@ -1106,6 +1129,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->timezone != NULL) {
                     free(settings->timezone);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 settings->timezone = strdup(decoded_param);
                 // Apply timezone using setenv and tzset
@@ -1128,9 +1152,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         // The multi-select will send multiple parameters with the same name
         // We need to parse them all and create a blob
         uint8_t *selected_ids = malloc(256);  // Maximum 256 object IDs
+        atomic_fetch_add(&malloc_count_settings, 1);
         if (!selected_ids) {
             nvs_close(settings_handle);
             free(query_buf);
+            atomic_fetch_add(&free_count_settings, 1);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
             return ESP_ERR_NO_MEM;
         }
@@ -1188,10 +1214,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         if (err == ESP_OK) {
             if (settings->selected_bthome_object_ids != NULL) {
                 free(settings->selected_bthome_object_ids);
+                atomic_fetch_add(&free_count_settings, 1);
             }
             
             if (selected_count > 0) {
                 settings->selected_bthome_object_ids = malloc(selected_count);
+                atomic_fetch_add(&malloc_count_settings, 1);
                 if (settings->selected_bthome_object_ids != NULL) {
                     memcpy(settings->selected_bthome_object_ids, selected_ids, selected_count);
                     settings->selected_bthome_object_ids_count = selected_count;
@@ -1213,6 +1241,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             ESP_LOGI(TAG, "BTHome object IDs unchanged");
         }
         free(selected_ids);
+        atomic_fetch_add(&free_count_settings, 1);
     } else {
         ESP_LOGI(TAG, "BTHome object IDs field not present in request, skipping");
     }
@@ -1225,6 +1254,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         
         // Format: mac_filter[N][field]=value where field is: mac, name, enabled
         mac_filter_t *filters = malloc(64 * sizeof(mac_filter_t));  // Maximum 64 filters
+        atomic_fetch_add(&malloc_count_settings, 1);
         if (!filters) {
             nvs_close(settings_handle);
             free(query_buf);
@@ -1320,10 +1350,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         if (err == ESP_OK) {
             if (settings->mac_filters != NULL) {
                 free(settings->mac_filters);
+                atomic_fetch_add(&free_count_settings, 1);
             }
             
             if (filter_count > 0) {
                 settings->mac_filters = malloc(filter_count * sizeof(mac_filter_t));
+                atomic_fetch_add(&malloc_count_settings, 1);
                 if (settings->mac_filters != NULL) {
                     memcpy(settings->mac_filters, filters, filter_count * sizeof(mac_filter_t));
                     settings->mac_filters_count = filter_count;
@@ -1345,6 +1377,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             ESP_LOGI(TAG, "MAC filters unchanged");
         }
         free(filters);
+        atomic_fetch_add(&free_count_settings, 1);
     } else {
         ESP_LOGI(TAG, "MAC filter field not present in request, skipping");
     }
@@ -1357,9 +1390,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         
         // Format: ds18b20_name[N][field]=value where field is: address, name
         ds18b20_name_t *names = malloc(64 * sizeof(ds18b20_name_t));  // Maximum 64 devices
+        atomic_fetch_add(&malloc_count_settings, 1);
         if (!names) {
             nvs_close(settings_handle);
             free(query_buf);
+            atomic_fetch_add(&free_count_settings, 1);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
             return ESP_ERR_NO_MEM;
         }
@@ -1440,10 +1475,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             if (err == ESP_OK) {
                 if (settings->ds18b20_names != NULL) {
                     free(settings->ds18b20_names);
+                    atomic_fetch_add(&free_count_settings, 1);
                 }
                 
                 if (name_count > 0) {
                     settings->ds18b20_names = malloc(name_count * sizeof(ds18b20_name_t));
+                    atomic_fetch_add(&malloc_count_settings, 1);
                     if (settings->ds18b20_names != NULL) {
                         memcpy(settings->ds18b20_names, names, name_count * sizeof(ds18b20_name_t));
                         settings->ds18b20_names_count = name_count;
@@ -1465,6 +1502,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             ESP_LOGI(TAG, "DS18B20 names unchanged");
         }
         free(names);
+        atomic_fetch_add(&free_count_settings, 1);
     } else {
         ESP_LOGI(TAG, "DS18B20 name field not present in request, skipping");
     }
@@ -1480,6 +1518,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     
     nvs_close(settings_handle);
     free(query_buf);
+    atomic_fetch_add(&free_count_settings, 1);
     
     if (updated) {
         httpd_resp_set_status(req, HTTPD_200);
@@ -1571,6 +1610,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->update_url = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->update_url == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for update_url");
                 return ESP_ERR_NO_MEM;
@@ -1596,6 +1636,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->password = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->password == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for password");
                 return ESP_ERR_NO_MEM;
@@ -1670,6 +1711,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->wifi_ssid = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->wifi_ssid == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for wifi_ssid");
                 return ESP_ERR_NO_MEM;
@@ -1695,6 +1737,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->wifi_password = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->wifi_password == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for password");
                 return ESP_ERR_NO_MEM;
@@ -1758,6 +1801,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->hostname = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->hostname == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for hostname");
                 return ESP_ERR_NO_MEM;
@@ -1783,6 +1827,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->timezone = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->timezone == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for timezone");
                 return ESP_ERR_NO_MEM;
@@ -1815,6 +1860,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->selected_bthome_object_ids = malloc(blob_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->selected_bthome_object_ids == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for selected_bthome_object_ids");
                 return ESP_ERR_NO_MEM;
@@ -1823,6 +1869,7 @@ esp_err_t settings_init(settings_t *settings)
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Error (%s) reading bthome_obj_ids!", esp_err_to_name(err));
                 free(settings->selected_bthome_object_ids);
+                atomic_fetch_add(&free_count_settings, 1);
                 settings->selected_bthome_object_ids = NULL;
                 return err;
             }
@@ -1989,6 +2036,7 @@ esp_err_t settings_init(settings_t *settings)
             }
             settings->mac_filters_count = blob_size / sizeof(mac_filter_t);
             settings->mac_filters = malloc(blob_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->mac_filters == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for mac_filters");
                 return ESP_ERR_NO_MEM;
@@ -1997,6 +2045,7 @@ esp_err_t settings_init(settings_t *settings)
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Error (%s) reading mac_filters!", esp_err_to_name(err));
                 free(settings->mac_filters);
+                atomic_fetch_add(&free_count_settings, 1);
                 settings->mac_filters = NULL;
                 settings->mac_filters_count = 0;
                 return err;
@@ -2036,6 +2085,7 @@ esp_err_t settings_init(settings_t *settings)
             }
             settings->ds18b20_names_count = blob_size / sizeof(ds18b20_name_t);
             settings->ds18b20_names = malloc(blob_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->ds18b20_names == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for ds18b20_names");
                 return ESP_ERR_NO_MEM;
@@ -2044,6 +2094,7 @@ esp_err_t settings_init(settings_t *settings)
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Error (%s) reading ds18b20_names!", esp_err_to_name(err));
                 free(settings->ds18b20_names);
+                atomic_fetch_add(&free_count_settings, 1);
                 settings->ds18b20_names = NULL;
                 settings->ds18b20_names_count = 0;
                 return err;
@@ -2071,6 +2122,7 @@ esp_err_t settings_init(settings_t *settings)
     switch (err) {
         case ESP_OK:
             settings->syslog_server = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
             if (settings->syslog_server == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for syslog_server");
                 return ESP_ERR_NO_MEM;

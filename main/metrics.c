@@ -9,12 +9,31 @@
 
 static const char *TAG = "metrics";
 
+// Define atomic malloc counters
+atomic_uint_fast32_t malloc_count_settings = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_metrics = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_sensors = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_pump = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_main = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_http_server = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_syslog = ATOMIC_VAR_INIT(0);
+
+// Define atomic free counters
+atomic_uint_fast32_t free_count_settings = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_metrics = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_sensors = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_pump = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_main = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_http_server = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_syslog = ATOMIC_VAR_INIT(0);
+
 static esp_err_t metrics_handler(httpd_req_t *req) {
     settings_t *settings = (settings_t *)req->user_ctx;
     
     // Allocate larger buffer for BTHome metrics
     size_t response_size = 8192;
     char *response = malloc(response_size);
+    atomic_fetch_add(&malloc_count_metrics, 1);
     if (response == NULL) {
         ESP_LOGE(TAG, "Failed to allocate memory for metrics response");
         httpd_resp_send_500(req);
@@ -94,6 +113,60 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                       "# TYPE uptime_seconds counter\n"
                       "uptime_seconds{hostname=\"%s\"} %lld\n", hostname, uptime_seconds);
     
+    // Malloc count metrics
+    offset += snprintf(response + offset, response_size - offset,
+                      "# HELP malloc_count_total Total number of malloc calls per source file\n"
+                      "# TYPE malloc_count_total counter\n");
+    
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"settings.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_settings));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"metrics.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_metrics));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"sensors.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_sensors));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"pump.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_pump));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"main.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_main));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"http_server.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_http_server));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"syslog.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_syslog));
+    
+    // Free count metrics
+    offset += snprintf(response + offset, response_size - offset,
+                      "# HELP free_count_total Total number of free calls per source file\n"
+                      "# TYPE free_count_total counter\n");
+    
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"settings.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_settings));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"metrics.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_metrics));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"sensors.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_sensors));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"pump.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_pump));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"main.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_main));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"http_server.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_http_server));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"syslog.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_syslog));
+    
     // Set response headers and send
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "text/plain; version=0.0.4");
@@ -101,6 +174,7 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     httpd_resp_send(req, response, offset);
     
     free(response);
+    atomic_fetch_add(&free_count_metrics, 1);
     return ESP_OK;
 }
 
