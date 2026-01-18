@@ -38,6 +38,7 @@ static char *http_auth_basic(const char *username, const char *password)
         ESP_LOGE(TAG, "No enough memory for user information");
         return NULL;
     }
+    atomic_fetch_add(&malloc_count_http_server, 1); //asprintf for user_info
     esp_crypto_base64_encode(NULL, 0, &n, (const unsigned char *)user_info, strlen(user_info));
 
     /* 6: The length of the "Basic " string
