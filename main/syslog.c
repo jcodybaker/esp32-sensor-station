@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_netif.h"
@@ -19,7 +20,7 @@ static const char *TAG = "syslog";
 #define SYSLOG_MAX_MSG_LEN 1024
 
 typedef struct {
-    char *message;  // Dynamically allocated
+    char message[SYSLOG_MAX_MSG_LEN];
     int priority;
 } syslog_msg_t;
 
@@ -29,6 +30,8 @@ static settings_t *g_settings = NULL;
 static int syslog_sock = -1;
 static struct sockaddr_in syslog_addr;
 static bool syslog_enabled = false;
+static syslog_msg_t msg;
+
 
 // Syslog facility and severity constants
 #define SYSLOG_FACILITY_USER 1
@@ -43,8 +46,15 @@ static bool syslog_enabled = false;
 
 // Custom log handler for ESP-IDF logging system
 static vprintf_like_t original_vprintf = NULL;
+static SemaphoreHandle_t vprintf_mutex = NULL;
 
 static int custom_vprintf(const char *fmt, va_list args) {
+    // Take mutex with timeout to prevent deadlocks
+    if (vprintf_mutex && xSemaphoreTake(vprintf_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        // If we can't get the mutex, just return to avoid blocking
+        return 0;
+    }
+    
     // First, call the original vprintf to maintain console output
     int ret = 0;
     if (original_vprintf) {
@@ -57,42 +67,34 @@ static int custom_vprintf(const char *fmt, va_list args) {
     // If syslog is enabled and we have a valid queue, send to syslog
     if (syslog_enabled && syslog_queue && fmt) {
         // Allocate message on heap
-        char *message = malloc(SYSLOG_MAX_MSG_LEN);
-        atomic_fetch_add(&malloc_count_syslog, 1);
-        if (!message) {
-            return ret;  // Skip if allocation fails
-        }
         
         // Format the message
-        vsnprintf(message, SYSLOG_MAX_MSG_LEN, fmt, args);
+        vsnprintf(msg.message, SYSLOG_MAX_MSG_LEN, fmt, args);
         
         // Parse log level from ESP-IDF log format
         // ESP-IDF logs typically start with a level indicator like "E (123) TAG: message"
         int severity = SYSLOG_SEVERITY_INFO;
-        if (message[0] == 'E' && message[1] == ' ') {
+        if (msg.message[0] == 'E' && msg.message[1] == ' ') {
             severity = SYSLOG_SEVERITY_ERROR;
-        } else if (message[0] == 'W' && message[1] == ' ') {
+        } else if (msg.message[0] == 'W' && msg.message[1] == ' ') {
             severity = SYSLOG_SEVERITY_WARNING;
-        } else if (message[0] == 'I' && message[1] == ' ') {
+        } else if (msg.message[0] == 'I' && msg.message[1] == ' ') {
             severity = SYSLOG_SEVERITY_INFO;
-        } else if (message[0] == 'D' && message[1] == ' ') {
+        } else if (msg.message[0] == 'D' && msg.message[1] == ' ') {
             severity = SYSLOG_SEVERITY_DEBUG;
-        } else if (message[0] == 'V' && message[1] == ' ') {
+        } else if (msg.message[0] == 'V' && msg.message[1] == ' ') {
             severity = SYSLOG_SEVERITY_DEBUG;
         }
-        
-        syslog_msg_t msg;
-        msg.message = message;
         msg.priority = (SYSLOG_FACILITY_USER << 3) | severity;
         
         // Try to send to queue (non-blocking to avoid deadlocks)
-        if (xQueueSend(syslog_queue, &msg, 0) != pdTRUE) {
-            // Queue full, free the message
-            free(message);
-            atomic_fetch_add(&free_count_syslog, 1);
-        }
+        xQueueSend(syslog_queue, &msg, 0);
     }
 
+    if (vprintf_mutex) {
+        xSemaphoreGive(vprintf_mutex);
+    }
+    
     return ret;
 }
 
@@ -186,6 +188,15 @@ esp_err_t syslog_init(settings_t *settings) {
     ESP_LOGI(TAG, "Initializing syslog client (server: %s:%d)", 
              settings->syslog_server, settings->syslog_port);
     
+    // Create mutex for vprintf
+    if (!vprintf_mutex) {
+        vprintf_mutex = xSemaphoreCreateMutex();
+        if (!vprintf_mutex) {
+            ESP_LOGE(TAG, "Failed to create vprintf mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    
     // Create message queue
     syslog_queue = xQueueCreate(SYSLOG_QUEUE_SIZE, sizeof(syslog_msg_t));
     if (!syslog_queue) {
@@ -226,6 +237,12 @@ void syslog_deinit(void) {
     if (original_vprintf) {
         esp_log_set_vprintf(original_vprintf);
         original_vprintf = NULL;
+    }
+    
+    // Delete mutex
+    if (vprintf_mutex) {
+        vSemaphoreDelete(vprintf_mutex);
+        vprintf_mutex = NULL;
     }
     
     // Close socket
