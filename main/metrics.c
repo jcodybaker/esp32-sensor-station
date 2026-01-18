@@ -3,6 +3,7 @@
 #include "sensors.h"
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -112,6 +113,26 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                       "# HELP uptime_seconds System uptime in seconds\n"
                       "# TYPE uptime_seconds counter\n"
                       "uptime_seconds{hostname=\"%s\"} %lld\n", hostname, uptime_seconds);
+    
+    // Heap memory metrics
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t min_free_heap = esp_get_minimum_free_heap_size();
+    
+    offset += snprintf(response + offset, response_size - offset,
+                      "# HELP heap_free_bytes Current free heap memory in bytes\n"
+                      "# TYPE heap_free_bytes gauge\n"
+                      "heap_free_bytes{hostname=\"%s\"} %u\n", hostname, free_heap);
+    
+    offset += snprintf(response + offset, response_size - offset,
+                      "# HELP heap_min_free_bytes Minimum free heap memory ever reached in bytes\n"
+                      "# TYPE heap_min_free_bytes gauge\n"
+                      "heap_min_free_bytes{hostname=\"%s\"} %u\n", hostname, min_free_heap);
+    
+    uint32_t largest_free_block = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    offset += snprintf(response + offset, response_size - offset,
+                      "# HELP heap_largest_free_block_bytes Largest contiguous free memory block in bytes\n"
+                      "# TYPE heap_largest_free_block_bytes gauge\n"
+                      "heap_largest_free_block_bytes{hostname=\"%s\"} %u\n", hostname, largest_free_block);
     
     // Malloc count metrics
     offset += snprintf(response + offset, response_size - offset,
