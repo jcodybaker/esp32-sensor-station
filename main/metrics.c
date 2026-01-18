@@ -18,6 +18,7 @@ atomic_uint_fast32_t malloc_count_pump = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t malloc_count_main = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t malloc_count_http_server = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t malloc_count_syslog = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t malloc_count_mqtt_publisher = ATOMIC_VAR_INIT(0);
 
 // Define atomic free counters
 atomic_uint_fast32_t free_count_settings = ATOMIC_VAR_INIT(0);
@@ -27,6 +28,7 @@ atomic_uint_fast32_t free_count_pump = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t free_count_main = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t free_count_http_server = ATOMIC_VAR_INIT(0);
 atomic_uint_fast32_t free_count_syslog = ATOMIC_VAR_INIT(0);
+atomic_uint_fast32_t free_count_mqtt_publisher = ATOMIC_VAR_INIT(0);
 
 static esp_err_t metrics_handler(httpd_req_t *req) {
     settings_t *settings = (settings_t *)req->user_ctx;
@@ -160,6 +162,9 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     offset += snprintf(response + offset, response_size - offset,
                       "malloc_count_total{hostname=\"%s\",file=\"syslog.c\"} %u\n", 
                       hostname, atomic_load(&malloc_count_syslog));
+    offset += snprintf(response + offset, response_size - offset,
+                      "malloc_count_total{hostname=\"%s\",file=\"mqtt_publisher.c\"} %u\n", 
+                      hostname, atomic_load(&malloc_count_mqtt_publisher));
     
     // Free count metrics
     offset += snprintf(response + offset, response_size - offset,
@@ -187,6 +192,9 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     offset += snprintf(response + offset, response_size - offset,
                       "free_count_total{hostname=\"%s\",file=\"syslog.c\"} %u\n", 
                       hostname, atomic_load(&free_count_syslog));
+    offset += snprintf(response + offset, response_size - offset,
+                      "free_count_total{hostname=\"%s\",file=\"mqtt_publisher.c\"} %u\n", 
+                      hostname, atomic_load(&free_count_mqtt_publisher));
     
     // Set response headers and send
     httpd_resp_set_status(req, HTTPD_200);

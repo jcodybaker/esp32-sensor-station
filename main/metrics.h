@@ -13,6 +13,7 @@ extern atomic_uint_fast32_t malloc_count_pump;
 extern atomic_uint_fast32_t malloc_count_main;
 extern atomic_uint_fast32_t malloc_count_http_server;
 extern atomic_uint_fast32_t malloc_count_syslog;
+extern atomic_uint_fast32_t malloc_count_mqtt_publisher;
 
 // Atomic free counters per source file
 extern atomic_uint_fast32_t free_count_settings;
@@ -22,6 +23,7 @@ extern atomic_uint_fast32_t free_count_pump;
 extern atomic_uint_fast32_t free_count_main;
 extern atomic_uint_fast32_t free_count_http_server;
 extern atomic_uint_fast32_t free_count_syslog;
+extern atomic_uint_fast32_t free_count_mqtt_publisher;
 
 void metrics_init(settings_t *settings, httpd_handle_t server);
 

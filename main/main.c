@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "http_server.h"
 #include "metrics.h"
+#include "mqtt_publisher.h"
 #include <esp_log.h>
 #include "bthome_observer.h"
 #include "weight.h"
@@ -43,6 +44,7 @@ void app_main(void)
     ESP_ERROR_CHECK(settings_init(settings));
     wifi_init(settings);
     syslog_init(settings);  // Initialize syslog after WiFi
+    mqtt_publisher_init(settings);  // Initialize MQTT client after WiFi
     httpd_handle_t http_server = http_server_init();
     settings_register(settings, http_server);
     sensors_init(settings, http_server);

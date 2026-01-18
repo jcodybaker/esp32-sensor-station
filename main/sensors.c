@@ -1,6 +1,7 @@
 #include "sensors.h"
 #include "settings.h"
 #include "metrics.h"
+#include "mqtt_publisher.h"
 #include <esp_log.h>
 #include <esp_http_server.h>
 #include <esp_app_format.h>
@@ -369,6 +370,12 @@ bool sensors_update_with_link(int sensor_id, float value, bool available, const 
     if (sensors_mutex != NULL) {
         xSemaphoreGive(sensors_mutex);
     }
+    
+    // Publish to MQTT if enabled (don't hold mutex during MQTT publish)
+    if (mqtt_is_enabled()) {
+        mqtt_publish_sensors();
+    }
+    
     return true;
 }
 

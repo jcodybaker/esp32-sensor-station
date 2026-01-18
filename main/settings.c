@@ -239,6 +239,58 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->syslog_port);
     httpd_resp_sendstr_chunk(req, buffer);
 
+    // Send MQTT settings
+    httpd_resp_sendstr_chunk(req,
+        "<hr class='major'/>\n"
+        "<h2>MQTT Configuration</h2>\n");
+    
+    // Send mqtt_broker_url with current value
+    char *encoded_mqtt_broker = url_encode(settings->mqtt_broker_url);
+    snprintf(buffer, 1024,
+        "<label for='mqtt_broker_url'>MQTT Broker URL:</label>\n"
+        "<input type='text' id='mqtt_broker_url' name='mqtt_broker_url' value='%s' placeholder='mqtt://broker.example.com'>\n",
+        encoded_mqtt_broker ? encoded_mqtt_broker : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_mqtt_broker);
+    atomic_fetch_add(&free_count_settings, 1);
+    
+    // Send mqtt_port with current value
+    snprintf(buffer, 1024,
+        "<label for='mqtt_port'>MQTT Port:</label>\n"
+        "<input type='number' id='mqtt_port' name='mqtt_port' value='%u' min='1' max='65535'>\n",
+        settings->mqtt_port);
+    httpd_resp_sendstr_chunk(req, buffer);
+    
+    // Send mqtt_username with current value
+    char *encoded_mqtt_username = url_encode(settings->mqtt_username);
+    snprintf(buffer, 1024,
+        "<label for='mqtt_username'>MQTT Username (optional):</label>\n"
+        "<input type='text' id='mqtt_username' name='mqtt_username' value='%s'>\n",
+        encoded_mqtt_username ? encoded_mqtt_username : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_mqtt_username);
+    atomic_fetch_add(&free_count_settings, 1);
+    
+    // Send mqtt_password with current value
+    char *encoded_mqtt_password = url_encode(settings->mqtt_password);
+    snprintf(buffer, 1024,
+        "<label for='mqtt_password'>MQTT Password (optional):</label>\n"
+        "<input type='password' id='mqtt_password' name='mqtt_password' value='%s'>\n",
+        encoded_mqtt_password ? encoded_mqtt_password : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_mqtt_password);
+    atomic_fetch_add(&free_count_settings, 1);
+    
+    // Send mqtt_topic with current value
+    char *encoded_mqtt_topic = url_encode(settings->mqtt_topic);
+    snprintf(buffer, 1024,
+        "<label for='mqtt_topic'>MQTT Topic:</label>\n"
+        "<input type='text' id='mqtt_topic' name='mqtt_topic' value='%s' placeholder='station/sensors'>\n",
+        encoded_mqtt_topic ? encoded_mqtt_topic : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_mqtt_topic);
+    atomic_fetch_add(&free_count_settings, 1);
+
     // Send weight_tare with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
@@ -1093,6 +1145,120 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
+    // Check and update mqtt_broker_url
+    if (httpd_query_key_value(query_buf, "mqtt_broker_url", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        if (settings->mqtt_broker_url != NULL && strcmp(decoded_param, settings->mqtt_broker_url) == 0) {
+            ESP_LOGI(TAG, "MQTT broker URL unchanged");
+            decoded_param[0] = '\0';
+        }
+        if (strlen(decoded_param) > 0 || (settings->mqtt_broker_url != NULL && strlen(settings->mqtt_broker_url) > 0)) {
+            err = nvs_set_str(settings_handle, "mqtt_broker", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->mqtt_broker_url != NULL) {
+                    free(settings->mqtt_broker_url);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->mqtt_broker_url = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_broker_url to %s", decoded_param);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_broker_url to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
+    // Check and update mqtt_port
+    if (httpd_query_key_value(query_buf, "mqtt_port", param_buf, sizeof(param_buf)) == ESP_OK) {
+        uint16_t mqtt_port = (uint16_t)atoi(param_buf);
+        if (mqtt_port > 0 && mqtt_port != settings->mqtt_port) {
+            err = nvs_set_u16(settings_handle, "mqtt_port", mqtt_port);
+            if (err == ESP_OK) {
+                settings->mqtt_port = mqtt_port;
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_port to %u", mqtt_port);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_port to NVS: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGI(TAG, "MQTT port unchanged or invalid");
+        }
+    }
+
+    // Check and update mqtt_username
+    if (httpd_query_key_value(query_buf, "mqtt_username", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        if (settings->mqtt_username != NULL && strcmp(decoded_param, settings->mqtt_username) == 0) {
+            ESP_LOGI(TAG, "MQTT username unchanged");
+            decoded_param[0] = '\0';
+        }
+        if (strlen(decoded_param) > 0 || (settings->mqtt_username != NULL && strlen(settings->mqtt_username) > 0)) {
+            err = nvs_set_str(settings_handle, "mqtt_user", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->mqtt_username != NULL) {
+                    free(settings->mqtt_username);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->mqtt_username = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_username to %s", decoded_param);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_username to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
+    // Check and update mqtt_password
+    if (httpd_query_key_value(query_buf, "mqtt_password", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        if (settings->mqtt_password != NULL && strcmp(decoded_param, settings->mqtt_password) == 0) {
+            ESP_LOGI(TAG, "MQTT password unchanged");
+            decoded_param[0] = '\0';
+        }
+        if (strlen(decoded_param) > 0 || (settings->mqtt_password != NULL && strlen(settings->mqtt_password) > 0)) {
+            err = nvs_set_str(settings_handle, "mqtt_pass", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->mqtt_password != NULL) {
+                    free(settings->mqtt_password);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->mqtt_password = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_password");
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_password to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
+    // Check and update mqtt_topic
+    if (httpd_query_key_value(query_buf, "mqtt_topic", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        if (settings->mqtt_topic != NULL && strcmp(decoded_param, settings->mqtt_topic) == 0) {
+            ESP_LOGI(TAG, "MQTT topic unchanged");
+            decoded_param[0] = '\0';
+        }
+        if (strlen(decoded_param) > 0 || (settings->mqtt_topic != NULL && strlen(settings->mqtt_topic) > 0)) {
+            err = nvs_set_str(settings_handle, "mqtt_topic", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->mqtt_topic != NULL) {
+                    free(settings->mqtt_topic);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->mqtt_topic = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_topic to %s", decoded_param);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_topic to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
     // Check and update hostname
     if (httpd_query_key_value(query_buf, "hostname", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -1595,6 +1761,11 @@ esp_err_t settings_init(settings_t *settings)
     settings->pump_dispense_ml = 100;  // Default 100ml
     settings->syslog_server = NULL;
     settings->syslog_port = 514;  // Default syslog port
+    settings->mqtt_broker_url = NULL;
+    settings->mqtt_username = NULL;
+    settings->mqtt_password = NULL;
+    settings->mqtt_topic = NULL;
+    settings->mqtt_port = 1883;  // Default MQTT port
     // Open NVS handle
     ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -2157,6 +2328,127 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading syslog_port!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_broker_url' from NVS...");
+    err = nvs_get_str(settings_handle, "mqtt_broker", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_broker_url = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->mqtt_broker_url == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mqtt_broker_url");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "mqtt_broker", settings->mqtt_broker_url, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mqtt_broker_url!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mqtt_broker_url' = '%s'", settings->mqtt_broker_url);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_broker_url = strdup("");
+            ESP_LOGI(TAG, "No value for 'mqtt_broker_url'; using default = ''");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_broker_url!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_username' from NVS...");
+    err = nvs_get_str(settings_handle, "mqtt_user", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_username = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->mqtt_username == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mqtt_username");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "mqtt_user", settings->mqtt_username, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mqtt_username!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mqtt_username' = '%s'", settings->mqtt_username);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_username = strdup("");
+            ESP_LOGI(TAG, "No value for 'mqtt_username'; using default = ''");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_username!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_password' from NVS...");
+    err = nvs_get_str(settings_handle, "mqtt_pass", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_password = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->mqtt_password == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mqtt_password");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "mqtt_pass", settings->mqtt_password, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mqtt_password!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mqtt_password' = '***'");
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_password = strdup("");
+            ESP_LOGI(TAG, "No value for 'mqtt_password'; using default = ''");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_password!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_topic' from NVS...");
+    err = nvs_get_str(settings_handle, "mqtt_topic", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_topic = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->mqtt_topic == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mqtt_topic");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "mqtt_topic", settings->mqtt_topic, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mqtt_topic!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mqtt_topic' = '%s'", settings->mqtt_topic);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_topic = strdup("station/sensors");
+            ESP_LOGI(TAG, "No value for 'mqtt_topic'; using default = 'station/sensors'");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_topic!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_port' from NVS...");
+    uint16_t mqtt_port_value;
+    err = nvs_get_u16(settings_handle, "mqtt_port", &mqtt_port_value);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_port = mqtt_port_value;
+            ESP_LOGI(TAG, "Read 'mqtt_port' = %u", settings->mqtt_port);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_port = 1883;  // Default MQTT port
+            ESP_LOGI(TAG, "No value for 'mqtt_port'; using default = %u", settings->mqtt_port);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_port!", esp_err_to_name(err));
             return err;
     }
 
