@@ -274,7 +274,7 @@ esp_err_t mqtt_publish_status(void)
     offset += snprintf(json + offset, json_size - offset, 
                       "\"heap_min_free_bytes\":%lu,", min_free_heap);
     offset += snprintf(json + offset, json_size - offset, 
-                      "\"heap_largest_free_block_bytes\":%lu,", largest_free_block);
+                      "\"heap_largest_free_block_bytes\":%lu}", largest_free_block);
         
     // Publish to MQTT
     int msg_id = esp_mqtt_client_publish(mqtt_client, topic, json, offset, 0, 0);
