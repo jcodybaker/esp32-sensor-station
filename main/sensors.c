@@ -373,7 +373,7 @@ bool sensors_update_with_link(int sensor_id, float value, bool available, const 
     
     // Publish to MQTT if enabled (don't hold mutex during MQTT publish)
     if (mqtt_is_enabled()) {
-        mqtt_publish_sensors();
+        mqtt_publish_single_sensor(sensor_id);
     }
     
     return true;

@@ -48,11 +48,10 @@ typedef struct {
     bool temp_use_fahrenheit;          // Display temperatures in Fahrenheit (true) or Celsius (false)
     char *syslog_server;               // Syslog server hostname or IP address
     uint16_t syslog_port;              // Syslog server port (default 514)
-    char *mqtt_broker_url;             // MQTT broker URL (e.g., mqtt://broker.example.com)
+    char *mqtt_broker_url;             // MQTT broker URL (e.g., mqtt://broker.example.com:1883)
     char *mqtt_username;               // MQTT username (optional)
     char *mqtt_password;               // MQTT password (optional)
     char *mqtt_topic;                  // MQTT topic for sensor updates (default: station/sensors)
-    uint16_t mqtt_port;                // MQTT broker port (default 1883)
 } settings_t;
 
 esp_err_t settings_init(settings_t *settings);

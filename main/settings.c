@@ -19,6 +19,7 @@
 #include "temperature.h"
 #include "pump.h"
 #include "metrics.h"
+#include "mqtt_publisher.h"
 
 static const char *TAG = "settings";
 
@@ -244,6 +245,16 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "<hr class='major'/>\n"
         "<h2>MQTT Configuration</h2>\n");
     
+    // Display MQTT status and last error if any
+    const char *mqtt_error = mqtt_get_last_error();
+    if (mqtt_error && strlen(mqtt_error) > 0) {
+        snprintf(buffer, 1024,
+            "<div style='padding: 10px; margin: 10px 0; background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px;'>\n"
+            "<strong>Last MQTT Error:</strong> %s\n"
+            "</div>\n", mqtt_error);
+        httpd_resp_sendstr_chunk(req, buffer);
+    }
+    
     // Send mqtt_broker_url with current value
     char *encoded_mqtt_broker = url_encode(settings->mqtt_broker_url);
     snprintf(buffer, 1024,
@@ -253,13 +264,6 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_mqtt_broker);
     atomic_fetch_add(&free_count_settings, 1);
-    
-    // Send mqtt_port with current value
-    snprintf(buffer, 1024,
-        "<label for='mqtt_port'>MQTT Port:</label>\n"
-        "<input type='number' id='mqtt_port' name='mqtt_port' value='%u' min='1' max='65535'>\n",
-        settings->mqtt_port);
-    httpd_resp_sendstr_chunk(req, buffer);
     
     // Send mqtt_username with current value
     char *encoded_mqtt_username = url_encode(settings->mqtt_username);
@@ -1169,24 +1173,6 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
-    // Check and update mqtt_port
-    if (httpd_query_key_value(query_buf, "mqtt_port", param_buf, sizeof(param_buf)) == ESP_OK) {
-        uint16_t mqtt_port = (uint16_t)atoi(param_buf);
-        if (mqtt_port > 0 && mqtt_port != settings->mqtt_port) {
-            err = nvs_set_u16(settings_handle, "mqtt_port", mqtt_port);
-            if (err == ESP_OK) {
-                settings->mqtt_port = mqtt_port;
-                updated = true;
-                restart_needed = true;
-                ESP_LOGI(TAG, "Updated mqtt_port to %u", mqtt_port);
-            } else {
-                ESP_LOGE(TAG, "Failed to write mqtt_port to NVS: %s", esp_err_to_name(err));
-            }
-        } else {
-            ESP_LOGI(TAG, "MQTT port unchanged or invalid");
-        }
-    }
-
     // Check and update mqtt_username
     if (httpd_query_key_value(query_buf, "mqtt_username", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);
@@ -1765,7 +1751,6 @@ esp_err_t settings_init(settings_t *settings)
     settings->mqtt_username = NULL;
     settings->mqtt_password = NULL;
     settings->mqtt_topic = NULL;
-    settings->mqtt_port = 1883;  // Default MQTT port
     // Open NVS handle
     ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -2432,23 +2417,6 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading mqtt_topic!", esp_err_to_name(err));
-            return err;
-    }
-
-    ESP_LOGI(TAG, "Reading 'mqtt_port' from NVS...");
-    uint16_t mqtt_port_value;
-    err = nvs_get_u16(settings_handle, "mqtt_port", &mqtt_port_value);
-    switch (err) {
-        case ESP_OK:
-            settings->mqtt_port = mqtt_port_value;
-            ESP_LOGI(TAG, "Read 'mqtt_port' = %u", settings->mqtt_port);
-            break;
-        case ESP_ERR_NVS_NOT_FOUND:
-            settings->mqtt_port = 1883;  // Default MQTT port
-            ESP_LOGI(TAG, "No value for 'mqtt_port'; using default = %u", settings->mqtt_port);
-            break;
-        default:
-            ESP_LOGE(TAG, "Error (%s) reading mqtt_port!", esp_err_to_name(err));
             return err;
     }
 
