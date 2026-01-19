@@ -51,7 +51,8 @@ typedef struct {
     char *mqtt_broker_url;             // MQTT broker URL (e.g., mqtt://broker.example.com:1883)
     char *mqtt_username;               // MQTT username (optional)
     char *mqtt_password;               // MQTT password (optional)
-    char *mqtt_topic;                  // MQTT topic for sensor updates (default: station/sensors)
+    char *mqtt_topic;                  // MQTT topic for sensor updates (default: station/sensor)
+    char *mqtt_status_topic;           // MQTT topic for status updates (default: station/status)
 } settings_t;
 
 esp_err_t settings_init(settings_t *settings);

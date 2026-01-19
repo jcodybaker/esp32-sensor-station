@@ -288,11 +288,21 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     // Send mqtt_topic with current value
     char *encoded_mqtt_topic = url_encode(settings->mqtt_topic);
     snprintf(buffer, 1024,
-        "<label for='mqtt_topic'>MQTT Topic:</label>\n"
-        "<input type='text' id='mqtt_topic' name='mqtt_topic' value='%s' placeholder='station/sensors'>\n",
+        "<label for='mqtt_topic'>MQTT Sensor Topic:</label>\n"
+        "<input type='text' id='mqtt_topic' name='mqtt_topic' value='%s' placeholder='station/sensor'>\n",
         encoded_mqtt_topic ? encoded_mqtt_topic : "");
     httpd_resp_sendstr_chunk(req, buffer);
     free(encoded_mqtt_topic);
+    atomic_fetch_add(&free_count_settings, 1);
+
+    // Send mqtt_status_topic with current value
+    char *encoded_mqtt_status_topic = url_encode(settings->mqtt_status_topic);
+    snprintf(buffer, 1024,
+        "<label for='mqtt_status_topic'>MQTT Status Topic:</label>\n"
+        "<input type='text' id='mqtt_status_topic' name='mqtt_status_topic' value='%s' placeholder='station/status'>\n",
+        encoded_mqtt_status_topic ? encoded_mqtt_status_topic : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_mqtt_status_topic);
     atomic_fetch_add(&free_count_settings, 1);
 
     // Send weight_tare with current value
@@ -1245,6 +1255,30 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
+    // Check and update mqtt_status_topic
+    if (httpd_query_key_value(query_buf, "mqtt_status_topic", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        if (settings->mqtt_status_topic != NULL && strcmp(decoded_param, settings->mqtt_status_topic) == 0) {
+            ESP_LOGI(TAG, "MQTT status topic unchanged");
+            decoded_param[0] = '\0';
+        }
+        if (strlen(decoded_param) > 0 || (settings->mqtt_status_topic != NULL && strlen(settings->mqtt_status_topic) > 0)) {
+            err = nvs_set_str(settings_handle, "mqtt_status_topic", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->mqtt_status_topic != NULL) {
+                    free(settings->mqtt_status_topic);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->mqtt_status_topic = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated mqtt_status_topic to %s", decoded_param);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_status_topic to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
     // Check and update hostname
     if (httpd_query_key_value(query_buf, "hostname", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -1751,6 +1785,7 @@ esp_err_t settings_init(settings_t *settings)
     settings->mqtt_username = NULL;
     settings->mqtt_password = NULL;
     settings->mqtt_topic = NULL;
+    settings->mqtt_status_topic = NULL;
     // Open NVS handle
     ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -2412,11 +2447,37 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGI(TAG, "Read 'mqtt_topic' = '%s'", settings->mqtt_topic);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->mqtt_topic = strdup("station/sensors");
-            ESP_LOGI(TAG, "No value for 'mqtt_topic'; using default = 'station/sensors'");
+            settings->mqtt_topic = strdup("station/sensor");
+            ESP_LOGI(TAG, "No value for 'mqtt_topic'; using default = 'station/sensor'");
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading mqtt_topic!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_status_topic' from NVS...");
+    err = nvs_get_str(settings_handle, "mqtt_status_topic", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_status_topic = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->mqtt_status_topic == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for mqtt_status_topic");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "mqtt_status_topic", settings->mqtt_status_topic, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading mqtt_status_topic!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'mqtt_status_topic' = '%s'", settings->mqtt_status_topic);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_status_topic = strdup("station/status");
+            ESP_LOGI(TAG, "No value for 'mqtt_status_topic'; using default = 'station/status'");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_status_topic!", esp_err_to_name(err));
             return err;
     }
 

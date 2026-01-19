@@ -221,9 +221,9 @@ esp_err_t mqtt_publish_status(void)
     }
     
     // Get default topic if not configured
-    const char *topic = mqtt_settings->mqtt_topic;
+    const char *topic = mqtt_settings->mqtt_status_topic;
     if (!topic || strlen(topic) == 0) {
-        topic = "station/sensors";
+        topic = "station/status";
     }
     
     // Take mutex to protect JSON buffer
@@ -301,7 +301,7 @@ esp_err_t mqtt_publish_single_sensor(int sensor_id)
     // Get default topic if not configured
     const char *topic = mqtt_settings->mqtt_topic;
     if (!topic || strlen(topic) == 0) {
-        topic = "station/sensors";
+        topic = "station/sensor";
     }
     
     // Take mutex to protect JSON buffer
