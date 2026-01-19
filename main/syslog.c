@@ -105,7 +105,7 @@ static int custom_vprintf(const char *fmt, va_list args) {
 static void syslog_task(void *pvParameters) {
     while (1) {
         // Wait for messages from the queue
-        if (xQueueReceive(syslog_queue, &recv_msg, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(syslog_queue, recv_msg, portMAX_DELAY) == pdTRUE) {
             // Check if syslog is still enabled and configured
             if (!syslog_enabled || !g_settings || !g_settings->syslog_server || 
                 strlen(g_settings->syslog_server) == 0) {
