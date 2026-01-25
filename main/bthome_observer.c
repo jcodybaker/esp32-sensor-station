@@ -362,10 +362,14 @@ static int find_or_register_bthome_sensor(esp_bd_addr_t addr, uint8_t object_id)
         return -1;
     }
     
-    // Get sensor metadata
     const char *type_name = bthome_get_object_name(object_id);
     const char *unit = bthome_get_object_unit(object_id);
-    
+
+    if (object_id == BTHOME_SENSOR_TEMPERATURE_F) {
+        type_name = "Temperature";
+        unit = "°F";
+    }
+
     // Create sensor name using configured device name from settings
     char sensor_name[SENSOR_DISPLAY_NAME_MAX_LEN];
     sensor_name[0] = '\0';
@@ -417,16 +421,9 @@ static int find_or_register_bthome_sensor(esp_bd_addr_t addr, uint8_t object_id)
     snprintf(addr_str, sizeof(addr_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
-    // For temperature sensors, use the configured unit
-    bool is_temperature_f = (object_id == BTHOME_SENSOR_TEMPERATURE ||
-                          object_id == BTHOME_SENSOR_TEMPERATURE_SINT16_1 ||
-                          object_id == BTHOME_SENSOR_TEMPERATURE_SINT8 ||
-                          object_id == BTHOME_SENSOR_TEMPERATURE_SINT8_035 ||
-                          object_id == BTHOME_SENSOR_DEWPOINT) && g_settings && g_settings->temp_use_fahrenheit;
-
     // Register with sensor system
     int sensor_id = sensors_register(
-        is_temperature_f ? "" : sensor_name, // Don't set a display name for the C value if temp_use_fahrenheit is true
+        sensor_name, // Don't set a display name for the C value if temp_use_fahrenheit is true
         unit ? unit : "",
         metric_name,
         device_name[0] != '\0' ? device_name : addr_str,
@@ -444,30 +441,7 @@ static int find_or_register_bthome_sensor(esp_bd_addr_t addr, uint8_t object_id)
     bthome_sensor_map[bthome_sensor_count].registered = true;
     bthome_sensor_count++;
     ESP_LOGI(TAG, "Registered BTHome sensor: %s (ID %d)", sensor_name, sensor_id);
-    if (is_temperature_f) {
-        // Not found, register new sensor
-        if (bthome_sensor_count >= MAX_BTHOME_SENSORS) {
-            ESP_LOGW(TAG, "Maximum BTHome sensors reached (%d)", MAX_BTHOME_SENSORS);
-            xSemaphoreGive(sensor_map_mutex);
-            return -1;
-        }
-        // Register with sensor system
-        int sensor_id = sensors_register(sensor_name, "F", NULL, device_name[0] != '\0' ? device_name : addr_str, addr_str);
-        if (sensor_id < 0) {
-            ESP_LOGE(TAG, "Failed to register BTHome sensor: %s", sensor_name);
-            xSemaphoreGive(sensor_map_mutex);
-            return -1;
-        }
-        
-        // Store mapping
-        memcpy(bthome_sensor_map[bthome_sensor_count].addr, addr, 6);
-        bthome_sensor_map[bthome_sensor_count].object_id = BTHOME_SENSOR_TEMPERATURE_F;
-        bthome_sensor_map[bthome_sensor_count].sensor_id = sensor_id;
-        bthome_sensor_map[bthome_sensor_count].registered = true;
-        bthome_sensor_count++;
-        ESP_LOGI(TAG, "Registered BTHome sensor: %s (ID %d)", sensor_name, sensor_id);
-    }
-    
+   
     xSemaphoreGive(sensor_map_mutex);
     return sensor_id;
 }
@@ -491,6 +465,9 @@ static void bthome_packet_callback(esp_bd_addr_t addr, int rssi,
     
     // Register and update sensors for all measurements (filtered by settings)
     for (size_t i = 0; i < packet->measurement_count; i++) {
+        if(!is_object_id_selected(packet->measurements[i].object_id)) {
+            continue;
+        }
         const bthome_measurement_t *m = &packet->measurements[i];
         float factor = bthome_get_scaling_factor(m->object_id);
         float value = bthome_get_scaled_value(m, factor);
