@@ -23,6 +23,7 @@ static bool g_weight_available = false;
 // Sensor IDs for registered weight sensors
 static int sensor_id_grams = -1;
 static int sensor_id_lbs = -1;
+static int sensor_id_raw = -1;
 
 static void weight(void *pvParameters)
 {
@@ -117,6 +118,11 @@ static void weight(void *pvParameters)
             snprintf(tare_url, sizeof(tare_url), "/settings?weight_tare=%d", (int)g_latest_weight_raw);
             sensors_update_with_link(sensor_id_grams, g_latest_weight_grams, true, tare_url, "Tare");
         }
+        if (sensor_id_raw >= 0) {
+            // Build tare URL with current raw value
+            char tare_url[64];
+            sensors_update(sensor_id_raw, g_latest_weight_raw, true);
+        }
         if (sensor_id_lbs >= 0) {
             float lbs = g_latest_weight_grams / 453.59237f;
             sensors_update(sensor_id_lbs, lbs, true);
@@ -147,6 +153,7 @@ void weight_init(settings_t *settings)
         return;
     }
     // Register weight sensors
+    sensor_id_raw = sensors_register("", "", "load_cell_raw", NULL, NULL);
     sensor_id_grams = sensors_register("Weight", "g", "weight_grams", NULL, NULL);
     sensor_id_lbs = sensors_register("Weight", "lbs", NULL, NULL, NULL);
     
