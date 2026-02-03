@@ -179,14 +179,15 @@ static esp_err_t sensors_data_handler(httpd_req_t *req) {
     }
     
     int pos = snprintf(json_buf, 2048, "{\"sensors\":[");
-    
+    bool first = true;
     for (int i = 0; i < sensor_count && pos < 2000; i++) {
         if (sensors[i].display_name[0] == '\0' || sensors[i].unit[0] == '\0') {
             continue;
         }
-        if (i > 0) {
+        if (!first) {
             pos += snprintf(json_buf + pos, 2048 - pos, ",");
         }
+        first = false;
         
         // Build JSON object for this sensor
         char sensor_json[512];
