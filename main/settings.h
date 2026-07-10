@@ -45,6 +45,9 @@ typedef struct {
     int8_t pump_sda_gpio;              // Pump I2C SDA GPIO pin (-1 = disabled)
     int8_t pump_i2c_addr;              // Pump I2C device address
     int16_t pump_dispense_ml;          // Amount to dispense in ml
+    int8_t rcwl9620_trigger_gpio;       // RCWL-9620 ultrasonic sensor trigger GPIO pin (-1 = disabled)
+    int8_t rcwl9620_echo_gpio;          // RCWL-9620 ultrasonic sensor echo GPIO pin (-1 = disabled)
+    int8_t a02yyuw_rx_gpio;             // A02YYUW ultrasonic sensor UART RX GPIO pin (-1 = disabled)
     bool temp_use_fahrenheit;          // Display temperatures in Fahrenheit (true) or Celsius (false)
     char *syslog_server;               // Syslog server hostname or IP address
     uint16_t syslog_port;              // Syslog server port (default 514)

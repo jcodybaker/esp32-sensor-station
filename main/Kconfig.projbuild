@@ -169,3 +169,35 @@ menu "Weight Sensor Configuration"
         help
             Default amount of liquid to dispense in milliliters when no amount is specified.
 endmenu
+
+menu "RCWL-9620 Ultrasonic Sensor Configuration"
+
+    config ENABLE_RCWL9620
+        bool "Enable RCWL-9620 ultrasonic distance sensor support"
+        default y
+        help
+            Enables support for the RCWL-9620 ultrasonic distance sensor (e.g. M5Stack Unit
+            Sonic-IO). Disable to exclude this sensor entirely from the build. The sensor is
+            also disabled at runtime by default until trigger/echo GPIO pins are configured
+            in Settings.
+
+    config RCWL9620_MAX_DISTANCE_CM
+        int "Maximum measurable distance (cm)"
+        default 450
+        depends on ENABLE_RCWL9620
+        help
+            Maximum distance in centimeters to wait for an echo response. The RCWL-9620 is
+            rated for a range of 2cm-450cm.
+endmenu
+
+menu "A02YYUW Ultrasonic Sensor Configuration"
+
+    config ENABLE_A02YYUW
+        bool "Enable A02YYUW waterproof ultrasonic distance sensor support"
+        default y
+        help
+            Enables support for the DFRobot A02YYUW (SEN0311) waterproof UART ultrasonic
+            distance sensor. Disable to exclude this sensor entirely from the build. The
+            sensor is also disabled at runtime by default until its RX GPIO pin is
+            configured in Settings.
+endmenu

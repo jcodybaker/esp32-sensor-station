@@ -22,6 +22,8 @@
 #include "driver/i2c_master.h"
 #include "pump.h"
 #include "syslog.h"
+#include "rcwl9620.h"
+#include "a02yyuw.h"
 
 bool g_ntp_initialized = false;
 
@@ -64,6 +66,8 @@ void app_main(void)
         weight_init(settings);
         bthome_observer_init(settings, http_server);
         pump_init(settings, http_server);
+        rcwl9620_init(settings);
+        a02yyuw_init(settings);
     }
     
     ota_init(settings, http_server);

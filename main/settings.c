@@ -512,7 +512,32 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "  ds18b20NameIndex++;\n"
         "}\n"
         "</script>\n");
-    
+
+    // Send rcwl9620_trigger_gpio with current value
+    snprintf(buffer, 1024,
+        "<hr class='minor'/>\n"
+        "<h2>RCWL-9620 Ultrasonic Distance Sensor Configuration</h2>\n"
+        "<label for='rcwl9620_trigger_gpio'>RCWL-9620 Trigger GPIO Pin (-1 = disabled):</label>\n"
+        "<input type='number' id='rcwl9620_trigger_gpio' name='rcwl9620_trigger_gpio' value='%d' min='-1' max='39'>\n",
+        settings->rcwl9620_trigger_gpio);
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Send rcwl9620_echo_gpio with current value
+    snprintf(buffer, 1024,
+        "<label for='rcwl9620_echo_gpio'>RCWL-9620 Echo GPIO Pin (-1 = disabled):</label>\n"
+        "<input type='number' id='rcwl9620_echo_gpio' name='rcwl9620_echo_gpio' value='%d' min='-1' max='39'>\n",
+        settings->rcwl9620_echo_gpio);
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Send a02yyuw_rx_gpio with current value
+    snprintf(buffer, 1024,
+        "<hr class='minor'/>\n"
+        "<h2>A02YYUW Ultrasonic Distance Sensor Configuration</h2>\n"
+        "<label for='a02yyuw_rx_gpio'>A02YYUW UART RX GPIO Pin (-1 = disabled):</label>\n"
+        "<input type='number' id='a02yyuw_rx_gpio' name='a02yyuw_rx_gpio' value='%d' min='-1' max='39'>\n",
+        settings->a02yyuw_rx_gpio);
+    httpd_resp_sendstr_chunk(req, buffer);
+
     // Send BTHome object IDs multi-select
     httpd_resp_sendstr_chunk(req,
         "<hr class='minor'/>\n"
@@ -1053,6 +1078,66 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             } else {
                 ESP_LOGE(TAG, "Failed to write pump_dispense_ml to NVS: %s", esp_err_to_name(err));
             }
+        }
+    }
+
+    // Check and update rcwl9620_trigger_gpio
+    if (httpd_query_key_value(query_buf, "rcwl9620_trigger_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t rcwl9620_trigger_gpio = (int8_t)atoi(param_buf);
+        if (rcwl9620_trigger_gpio == settings->rcwl9620_trigger_gpio) {
+            ESP_LOGI(TAG, "RCWL-9620 trigger GPIO unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_i8(settings_handle, "rcwl_trig_gpio", rcwl9620_trigger_gpio);
+            if (err == ESP_OK) {
+                settings->rcwl9620_trigger_gpio = rcwl9620_trigger_gpio;
+                updated = true;
+                ESP_LOGI(TAG, "Updated rcwl9620_trigger_gpio to %d", rcwl9620_trigger_gpio);
+            } else {
+                ESP_LOGE(TAG, "Failed to write rcwl9620_trigger_gpio to NVS: %s", esp_err_to_name(err));
+            }
+            restart_needed = true;
+        }
+    }
+
+    // Check and update rcwl9620_echo_gpio
+    if (httpd_query_key_value(query_buf, "rcwl9620_echo_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t rcwl9620_echo_gpio = (int8_t)atoi(param_buf);
+        if (rcwl9620_echo_gpio == settings->rcwl9620_echo_gpio) {
+            ESP_LOGI(TAG, "RCWL-9620 echo GPIO unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_i8(settings_handle, "rcwl_echo_gpio", rcwl9620_echo_gpio);
+            if (err == ESP_OK) {
+                settings->rcwl9620_echo_gpio = rcwl9620_echo_gpio;
+                updated = true;
+                ESP_LOGI(TAG, "Updated rcwl9620_echo_gpio to %d", rcwl9620_echo_gpio);
+            } else {
+                ESP_LOGE(TAG, "Failed to write rcwl9620_echo_gpio to NVS: %s", esp_err_to_name(err));
+            }
+            restart_needed = true;
+        }
+    }
+
+    // Check and update a02yyuw_rx_gpio
+    if (httpd_query_key_value(query_buf, "a02yyuw_rx_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t a02yyuw_rx_gpio = (int8_t)atoi(param_buf);
+        if (a02yyuw_rx_gpio == settings->a02yyuw_rx_gpio) {
+            ESP_LOGI(TAG, "A02YYUW RX GPIO unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_i8(settings_handle, "a02yyuw_rx_gpio", a02yyuw_rx_gpio);
+            if (err == ESP_OK) {
+                settings->a02yyuw_rx_gpio = a02yyuw_rx_gpio;
+                updated = true;
+                ESP_LOGI(TAG, "Updated a02yyuw_rx_gpio to %d", a02yyuw_rx_gpio);
+            } else {
+                ESP_LOGE(TAG, "Failed to write a02yyuw_rx_gpio to NVS: %s", esp_err_to_name(err));
+            }
+            restart_needed = true;
         }
     }
 
@@ -1849,6 +1934,9 @@ esp_err_t settings_init(settings_t *settings)
     settings->pump_sda_gpio = -1;
     settings->pump_i2c_addr = 0x37;
     settings->pump_dispense_ml = 100;  // Default 100ml
+    settings->rcwl9620_trigger_gpio = -1;
+    settings->rcwl9620_echo_gpio = -1;
+    settings->a02yyuw_rx_gpio = -1;
     settings->syslog_server = NULL;
     settings->syslog_port = 514;  // Default syslog port
     settings->mqtt_broker_url = NULL;
@@ -2266,6 +2354,57 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading pump_i2c_addr!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'rcwl9620_trigger_gpio' from NVS...");
+    int8_t rcwl9620_trigger_gpio_value;
+    err = nvs_get_i8(settings_handle, "rcwl_trig_gpio", &rcwl9620_trigger_gpio_value);
+    switch (err) {
+        case ESP_OK:
+            settings->rcwl9620_trigger_gpio = rcwl9620_trigger_gpio_value;
+            ESP_LOGI(TAG, "Read 'rcwl9620_trigger_gpio' = %d", settings->rcwl9620_trigger_gpio);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->rcwl9620_trigger_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'rcwl9620_trigger_gpio'; using default = %d (disabled)", settings->rcwl9620_trigger_gpio);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading rcwl9620_trigger_gpio!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'rcwl9620_echo_gpio' from NVS...");
+    int8_t rcwl9620_echo_gpio_value;
+    err = nvs_get_i8(settings_handle, "rcwl_echo_gpio", &rcwl9620_echo_gpio_value);
+    switch (err) {
+        case ESP_OK:
+            settings->rcwl9620_echo_gpio = rcwl9620_echo_gpio_value;
+            ESP_LOGI(TAG, "Read 'rcwl9620_echo_gpio' = %d", settings->rcwl9620_echo_gpio);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->rcwl9620_echo_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'rcwl9620_echo_gpio'; using default = %d (disabled)", settings->rcwl9620_echo_gpio);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading rcwl9620_echo_gpio!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'a02yyuw_rx_gpio' from NVS...");
+    int8_t a02yyuw_rx_gpio_value;
+    err = nvs_get_i8(settings_handle, "a02yyuw_rx_gpio", &a02yyuw_rx_gpio_value);
+    switch (err) {
+        case ESP_OK:
+            settings->a02yyuw_rx_gpio = a02yyuw_rx_gpio_value;
+            ESP_LOGI(TAG, "Read 'a02yyuw_rx_gpio' = %d", settings->a02yyuw_rx_gpio);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->a02yyuw_rx_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'a02yyuw_rx_gpio'; using default = %d (disabled)", settings->a02yyuw_rx_gpio);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading a02yyuw_rx_gpio!", esp_err_to_name(err));
             return err;
     }
 

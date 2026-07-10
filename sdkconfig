@@ -469,6 +469,19 @@ CONFIG_PUMP_DEFAULT_DISPENSE_ML=8
 # end of Weight Sensor Configuration
 
 #
+# RCWL-9620 Ultrasonic Sensor Configuration
+#
+CONFIG_ENABLE_RCWL9620=y
+CONFIG_RCWL9620_MAX_DISTANCE_CM=450
+# end of RCWL-9620 Ultrasonic Sensor Configuration
+
+#
+# A02YYUW Ultrasonic Sensor Configuration
+#
+CONFIG_ENABLE_A02YYUW=y
+# end of A02YYUW Ultrasonic Sensor Configuration
+
+#
 # Compiler options
 #
 # CONFIG_COMPILER_OPTIMIZATION_DEBUG is not set
