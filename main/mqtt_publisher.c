@@ -5,6 +5,7 @@
 #include <esp_log.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <sys/time.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -24,6 +25,11 @@ static SemaphoreHandle_t json_mutex = NULL;
 static char last_error[256] = "";
 static SemaphoreHandle_t error_mutex = NULL;
 static TaskHandle_t mqtt_status_task_handle = NULL;
+
+// Per-sensor publish debouncing: at most one publish per sensor per mqtt_debounce_seconds.
+static SemaphoreHandle_t debounce_mutex = NULL;
+static int64_t last_publish_us[MAX_SENSORS] = {0};
+static esp_timer_handle_t debounce_timers[MAX_SENSORS] = {NULL};
 
 static void mqtt_status_task(void *pvParameters)
 {
@@ -116,6 +122,15 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
         json_mutex = xSemaphoreCreateMutex();
         if (json_mutex == NULL) {
             ESP_LOGE(TAG, "Failed to create JSON mutex");
+            return ESP_FAIL;
+        }
+    }
+
+    // Create mutex for per-sensor publish debouncing
+    if (debounce_mutex == NULL) {
+        debounce_mutex = xSemaphoreCreateMutex();
+        if (debounce_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create debounce mutex");
             return ESP_FAIL;
         }
     }
@@ -292,12 +307,12 @@ esp_err_t mqtt_publish_status(void)
     return ESP_OK;
 }
 
-esp_err_t mqtt_publish_single_sensor(int sensor_id)
+static esp_err_t mqtt_publish_single_sensor_now(int sensor_id)
 {
     if (!mqtt_is_enabled()) {
         return ESP_FAIL;
     }
-    
+
     // Get default topic if not configured
     const char *topic = mqtt_settings->mqtt_topic;
     if (!topic || strlen(topic) == 0) {
@@ -388,6 +403,80 @@ esp_err_t mqtt_publish_single_sensor(int sensor_id)
     return ESP_OK;
 }
 
+// Fires when a debounce window elapses; publishes whatever value the sensor holds at that moment.
+static void mqtt_debounce_timer_callback(void *arg)
+{
+    int sensor_id = (int)(intptr_t)arg;
+
+    if (debounce_mutex != NULL && xSemaphoreTake(debounce_mutex, portMAX_DELAY) == pdTRUE) {
+        last_publish_us[sensor_id] = esp_timer_get_time();
+        xSemaphoreGive(debounce_mutex);
+    }
+
+    mqtt_publish_single_sensor_now(sensor_id);
+}
+
+esp_err_t mqtt_publish_single_sensor(int sensor_id)
+{
+    if (!mqtt_is_enabled()) {
+        return ESP_FAIL;
+    }
+
+    if (sensor_id < 0 || sensor_id >= MAX_SENSORS) {
+        ESP_LOGE(TAG, "Invalid sensor_id %d", sensor_id);
+        return ESP_FAIL;
+    }
+
+    uint16_t debounce_seconds = mqtt_settings ? mqtt_settings->mqtt_debounce_seconds : 0;
+    if (debounce_seconds == 0) {
+        return mqtt_publish_single_sensor_now(sensor_id);
+    }
+
+    if (debounce_mutex == NULL) {
+        return mqtt_publish_single_sensor_now(sensor_id);
+    }
+
+    if (xSemaphoreTake(debounce_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire debounce mutex");
+        return ESP_FAIL;
+    }
+
+    int64_t now = esp_timer_get_time();
+    int64_t interval_us = (int64_t)debounce_seconds * 1000000LL;
+    int64_t elapsed = now - last_publish_us[sensor_id];
+
+    if (last_publish_us[sensor_id] == 0 || elapsed >= interval_us) {
+        // Outside the debounce window: publish immediately and reset the window.
+        last_publish_us[sensor_id] = now;
+        xSemaphoreGive(debounce_mutex);
+        return mqtt_publish_single_sensor_now(sensor_id);
+    }
+
+    // Inside the debounce window: let an already-pending timer handle it, or start one
+    // for the remainder of the window so the latest value still goes out once it elapses.
+    bool timer_pending = debounce_timers[sensor_id] != NULL && esp_timer_is_active(debounce_timers[sensor_id]);
+    if (!timer_pending) {
+        if (debounce_timers[sensor_id] == NULL) {
+            esp_timer_create_args_t timer_args = {
+                .callback = &mqtt_debounce_timer_callback,
+                .arg = (void *)(intptr_t)sensor_id,
+                .name = "mqtt_debounce",
+            };
+            esp_err_t err = esp_timer_create(&timer_args, &debounce_timers[sensor_id]);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to create debounce timer for sensor %d: %s", sensor_id, esp_err_to_name(err));
+                xSemaphoreGive(debounce_mutex);
+                return ESP_FAIL;
+            }
+        }
+        uint64_t delay_us = (uint64_t)(interval_us - elapsed);
+        esp_timer_start_once(debounce_timers[sensor_id], delay_us);
+    }
+
+    xSemaphoreGive(debounce_mutex);
+    return ESP_OK;
+}
+
 void mqtt_publisher_cleanup(void)
 {
     // Stop periodic status task
@@ -418,5 +507,19 @@ void mqtt_publisher_cleanup(void)
     if (error_mutex != NULL) {
         vSemaphoreDelete(error_mutex);
         error_mutex = NULL;
+    }
+
+    if (debounce_mutex != NULL && xSemaphoreTake(debounce_mutex, portMAX_DELAY) == pdTRUE) {
+        for (int i = 0; i < MAX_SENSORS; i++) {
+            if (debounce_timers[i] != NULL) {
+                esp_timer_stop(debounce_timers[i]);
+                esp_timer_delete(debounce_timers[i]);
+                debounce_timers[i] = NULL;
+            }
+            last_publish_us[i] = 0;
+        }
+        xSemaphoreGive(debounce_mutex);
+        vSemaphoreDelete(debounce_mutex);
+        debounce_mutex = NULL;
     }
 }

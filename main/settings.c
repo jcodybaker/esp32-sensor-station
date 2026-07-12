@@ -322,6 +322,13 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     free(encoded_mqtt_status_topic);
     atomic_fetch_add(&free_count_settings, 1);
 
+    // Send mqtt_debounce_seconds with current value
+    snprintf(buffer, 1024,
+        "<label for='mqtt_debounce_seconds'>MQTT Publish Interval (seconds, 0-3600, 0 = no limit):</label>\n"
+        "<input type='number' id='mqtt_debounce_seconds' name='mqtt_debounce_seconds' value='%u' min='0' max='3600'>\n",
+        settings->mqtt_debounce_seconds);
+    httpd_resp_sendstr_chunk(req, buffer);
+
     // Send weight_tare with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
@@ -1434,6 +1441,27 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
+    // Check and update mqtt_debounce_seconds
+    if (httpd_query_key_value(query_buf, "mqtt_debounce_seconds", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int32_t mqtt_debounce_seconds = atoi(param_buf);
+        if (mqtt_debounce_seconds < 0 || mqtt_debounce_seconds > 3600) {
+            ESP_LOGW(TAG, "Invalid mqtt_debounce_seconds value: %ld, must be 0-3600", (long)mqtt_debounce_seconds);
+        } else if (mqtt_debounce_seconds == settings->mqtt_debounce_seconds) {
+            ESP_LOGI(TAG, "MQTT debounce interval unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0 && mqtt_debounce_seconds >= 0 && mqtt_debounce_seconds <= 3600) {
+            err = nvs_set_u16(settings_handle, "mqtt_debounce", (uint16_t)mqtt_debounce_seconds);
+            if (err == ESP_OK) {
+                settings->mqtt_debounce_seconds = (uint16_t)mqtt_debounce_seconds;
+                updated = true;
+                ESP_LOGI(TAG, "Updated mqtt_debounce_seconds to %u", settings->mqtt_debounce_seconds);
+            } else {
+                ESP_LOGE(TAG, "Failed to write mqtt_debounce_seconds to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
     // Check and update hostname
     if (httpd_query_key_value(query_buf, "hostname", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -1944,6 +1972,7 @@ esp_err_t settings_init(settings_t *settings)
     settings->mqtt_password = NULL;
     settings->mqtt_topic = NULL;
     settings->mqtt_status_topic = NULL;
+    settings->mqtt_debounce_seconds = 10;  // Default 10 second per-sensor publish interval
     // Open NVS handle
     ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -2687,6 +2716,23 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading mqtt_status_topic!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'mqtt_debounce_seconds' from NVS...");
+    uint16_t mqtt_debounce_seconds_value;
+    err = nvs_get_u16(settings_handle, "mqtt_debounce", &mqtt_debounce_seconds_value);
+    switch (err) {
+        case ESP_OK:
+            settings->mqtt_debounce_seconds = mqtt_debounce_seconds_value;
+            ESP_LOGI(TAG, "Read 'mqtt_debounce_seconds' = %u", settings->mqtt_debounce_seconds);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->mqtt_debounce_seconds = 10;  // Default 10 second per-sensor publish interval
+            ESP_LOGI(TAG, "No value for 'mqtt_debounce_seconds'; using default = %u", settings->mqtt_debounce_seconds);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading mqtt_debounce_seconds!", esp_err_to_name(err));
             return err;
     }
 
