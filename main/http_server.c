@@ -156,6 +156,7 @@ httpd_handle_t http_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.max_uri_handlers = 16;
+    config.max_open_sockets = 10;
     
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
