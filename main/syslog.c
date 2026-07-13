@@ -1,4 +1,5 @@
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -140,12 +141,21 @@ static void syslog_task(void *pvParameters) {
             
             // Get hostname for syslog message
             const char *hostname = g_settings->hostname ? g_settings->hostname : "esp32";
-            
+
+            // RFC 3164 timestamp: "Mmm dd hh:mm:ss" (day-of-month space-padded), UTC
+            time_t now;
+            struct tm timeinfo;
+            time(&now);
+            gmtime_r(&now, &timeinfo);
+            char timestamp[16];
+            strftime(timestamp, sizeof(timestamp), "%b %e %H:%M:%S", &timeinfo);
+
             // Format syslog message according to RFC 3164
             // <priority>timestamp hostname tag: message
             snprintf(syslog_packet, SYSLOG_MAX_MSG_LEN + 100,
-                    "<%d>%s %s",
+                    "<%d>%s %s %s",
                     recv_msg->priority,
+                    timestamp,
                     hostname,
                     recv_msg->message);
             
