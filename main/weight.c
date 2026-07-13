@@ -119,8 +119,6 @@ static void weight(void *pvParameters)
             sensors_update_with_link(sensor_id_grams, g_latest_weight_grams, true, tare_url, "Tare");
         }
         if (sensor_id_raw >= 0) {
-            // Build tare URL with current raw value
-            char tare_url[64];
             sensors_update(sensor_id_raw, g_latest_weight_raw, true);
         }
         if (sensor_id_lbs >= 0) {

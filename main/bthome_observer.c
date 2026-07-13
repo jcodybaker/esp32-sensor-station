@@ -144,6 +144,7 @@ static void cache_packet(esp_bd_addr_t addr, int rssi, const bthome_packet_t *pa
             packet_cache[idx].last_seen = now;
         } else {
             ESP_LOGE(TAG, "Failed to copy packet for cache update");
+            packet_cache[idx].occupied = false;
         }
     } else {
         // Find slot to use (LFU eviction)
@@ -163,6 +164,7 @@ static void cache_packet(esp_bd_addr_t addr, int rssi, const bthome_packet_t *pa
                 packet_cache[idx].occupied = true;
             } else {
                 ESP_LOGE(TAG, "Failed to copy packet for new cache entry");
+                packet_cache[idx].occupied = false;
             }
         }
     }
@@ -601,6 +603,8 @@ void bthome_observer_init(settings_t *settings, httpd_handle_t server) {
     sensor_map_mutex = xSemaphoreCreateMutex();
     if (sensor_map_mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create sensor map mutex");
+        vSemaphoreDelete(cache_mutex);
+        cache_mutex = NULL;
         return;
     }
     
@@ -618,6 +622,10 @@ void bthome_observer_init(settings_t *settings, httpd_handle_t server) {
     ret = bthome_ble_scanner_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize BLE scanner: %s", esp_err_to_name(ret));
+        vSemaphoreDelete(cache_mutex);
+        cache_mutex = NULL;
+        vSemaphoreDelete(sensor_map_mutex);
+        sensor_map_mutex = NULL;
         return;
     }
     
@@ -644,6 +652,10 @@ void bthome_observer_init(settings_t *settings, httpd_handle_t server) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start BLE scanner: %s", esp_err_to_name(ret));
         bthome_ble_scanner_deinit();
+        vSemaphoreDelete(cache_mutex);
+        cache_mutex = NULL;
+        vSemaphoreDelete(sensor_map_mutex);
+        sensor_map_mutex = NULL;
         return;
     }
     

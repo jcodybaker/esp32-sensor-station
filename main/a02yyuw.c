@@ -88,6 +88,7 @@ void a02yyuw_init(settings_t *settings) {
     err = uart_param_config(A02YYUW_UART_PORT, &uart_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to configure UART: %s", esp_err_to_name(err));
+        uart_driver_delete(A02YYUW_UART_PORT);
         return;
     }
 
@@ -95,6 +96,7 @@ void a02yyuw_init(settings_t *settings) {
                         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set UART RX pin %d: %s", settings->a02yyuw_rx_gpio, esp_err_to_name(err));
+        uart_driver_delete(A02YYUW_UART_PORT);
         return;
     }
 

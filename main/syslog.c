@@ -18,7 +18,7 @@ static const char *TAG = "syslog";
 
 // Syslog message queue
 #define SYSLOG_QUEUE_SIZE 10
-#define SYSLOG_MAX_MSG_LEN 1024
+#define SYSLOG_MAX_MSG_LEN 256
 
 typedef struct {
     char message[SYSLOG_MAX_MSG_LEN];
@@ -32,8 +32,8 @@ static int syslog_sock = -1;
 static struct sockaddr_in syslog_addr;
 static bool syslog_enabled = false;
 
-static syslog_msg_t send_msg;
-// These are heap allocated in syslog_task
+// These are heap allocated in syslog_init, and only while syslog is enabled
+static syslog_msg_t *send_msg = NULL;
 static syslog_msg_t *recv_msg = NULL;
 static char *syslog_packet = NULL;
 
@@ -70,30 +70,28 @@ static int custom_vprintf(const char *fmt, va_list args) {
     }
 
     // If syslog is enabled and we have a valid queue, send to syslog
-    if (syslog_enabled && syslog_queue && fmt) {
-        // Allocate message on heap
-        
+    if (syslog_enabled && syslog_queue && send_msg && fmt) {
         // Format the message
-        vsnprintf(send_msg.message, SYSLOG_MAX_MSG_LEN, fmt, args);
-        
+        vsnprintf(send_msg->message, SYSLOG_MAX_MSG_LEN, fmt, args);
+
         // Parse log level from ESP-IDF log format
         // ESP-IDF logs typically start with a level indicator like "E (123) TAG: message"
         int severity = SYSLOG_SEVERITY_INFO;
-        if (send_msg.message[0] == 'E' && send_msg.message[1] == ' ') {
+        if (send_msg->message[0] == 'E' && send_msg->message[1] == ' ') {
             severity = SYSLOG_SEVERITY_ERROR;
-        } else if (send_msg.message[0] == 'W' && send_msg.message[1] == ' ') {
+        } else if (send_msg->message[0] == 'W' && send_msg->message[1] == ' ') {
             severity = SYSLOG_SEVERITY_WARNING;
-        } else if (send_msg.message[0] == 'I' && send_msg.message[1] == ' ') {
+        } else if (send_msg->message[0] == 'I' && send_msg->message[1] == ' ') {
             severity = SYSLOG_SEVERITY_INFO;
-        } else if (send_msg.message[0] == 'D' && send_msg.message[1] == ' ') {
+        } else if (send_msg->message[0] == 'D' && send_msg->message[1] == ' ') {
             severity = SYSLOG_SEVERITY_DEBUG;
-        } else if (send_msg.message[0] == 'V' && send_msg.message[1] == ' ') {
+        } else if (send_msg->message[0] == 'V' && send_msg->message[1] == ' ') {
             severity = SYSLOG_SEVERITY_DEBUG;
         }
-        send_msg.priority = (SYSLOG_FACILITY_USER << 3) | severity;
-        
+        send_msg->priority = (SYSLOG_FACILITY_USER << 3) | severity;
+
         // Try to send to queue (non-blocking to avoid deadlocks)
-        xQueueSend(syslog_queue, &send_msg, 0);
+        xQueueSend(syslog_queue, send_msg, 0);
     }
 
     if (vprintf_mutex) {
@@ -199,11 +197,24 @@ esp_err_t syslog_init(settings_t *settings) {
         }
     }
 
+    send_msg = malloc(sizeof(syslog_msg_t));
     recv_msg = malloc(sizeof(syslog_msg_t));
     syslog_packet = malloc(SYSLOG_MAX_MSG_LEN + 100);
-    atomic_fetch_add(&malloc_count_syslog, 2);
-    
-    
+    if (!send_msg || !recv_msg || !syslog_packet) {
+        ESP_LOGE(TAG, "Failed to allocate syslog buffers");
+        free(send_msg);
+        send_msg = NULL;
+        free(recv_msg);
+        recv_msg = NULL;
+        free(syslog_packet);
+        syslog_packet = NULL;
+        vSemaphoreDelete(vprintf_mutex);
+        vprintf_mutex = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    atomic_fetch_add(&malloc_count_syslog, 3);
+
+
     // Create message queue
     syslog_queue = xQueueCreate(SYSLOG_QUEUE_SIZE, sizeof(syslog_msg_t));
     if (!syslog_queue) {
@@ -272,6 +283,11 @@ void syslog_deinit(void) {
     }
     
     g_settings = NULL;
+    if (send_msg != NULL) {
+        free(send_msg);
+        atomic_fetch_add(&free_count_syslog, 1);
+        send_msg = NULL;
+    }
     if (recv_msg != NULL) {
         free(recv_msg);
         atomic_fetch_add(&free_count_syslog, 1);

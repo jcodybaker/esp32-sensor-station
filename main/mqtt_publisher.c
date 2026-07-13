@@ -20,16 +20,18 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 static settings_t *mqtt_settings = NULL;
 static bool mqtt_connected = false;
 static char *json_buffer = NULL;
-static size_t json_buffer_size = 1024;
+static size_t json_buffer_size = 512;
 static SemaphoreHandle_t json_mutex = NULL;
 static char last_error[256] = "";
 static SemaphoreHandle_t error_mutex = NULL;
 static TaskHandle_t mqtt_status_task_handle = NULL;
 
 // Per-sensor publish debouncing: at most one publish per sensor per mqtt_debounce_seconds.
+// last_publish_us/debounce_timers are heap allocated in mqtt_publisher_init, and only
+// while MQTT is configured.
 static SemaphoreHandle_t debounce_mutex = NULL;
-static int64_t last_publish_us[MAX_SENSORS] = {0};
-static esp_timer_handle_t debounce_timers[MAX_SENSORS] = {NULL};
+static int64_t *last_publish_us = NULL;
+static esp_timer_handle_t *debounce_timers = NULL;
 
 static void mqtt_status_task(void *pvParameters)
 {
@@ -134,7 +136,25 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
             return ESP_FAIL;
         }
     }
-    
+
+    // Allocate per-sensor debounce state
+    if (last_publish_us == NULL) {
+        last_publish_us = calloc(MAX_SENSORS, sizeof(int64_t));
+        atomic_fetch_add(&malloc_count_mqtt_publisher, 1);
+        if (last_publish_us == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate debounce state");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (debounce_timers == NULL) {
+        debounce_timers = calloc(MAX_SENSORS, sizeof(esp_timer_handle_t));
+        atomic_fetch_add(&malloc_count_mqtt_publisher, 1);
+        if (debounce_timers == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate debounce timers");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     // Allocate JSON buffer
     if (json_buffer == NULL) {
         json_buffer = malloc(json_buffer_size);
@@ -181,13 +201,17 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
                                                    mqtt_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register MQTT event handler: %s", esp_err_to_name(err));
+        esp_mqtt_client_destroy(mqtt_client);
+        mqtt_client = NULL;
         return err;
     }
-    
+
     // Start MQTT client
     err = esp_mqtt_client_start(mqtt_client);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
+        esp_mqtt_client_destroy(mqtt_client);
+        mqtt_client = NULL;
         return err;
     }
     
@@ -509,7 +533,8 @@ void mqtt_publisher_cleanup(void)
         error_mutex = NULL;
     }
 
-    if (debounce_mutex != NULL && xSemaphoreTake(debounce_mutex, portMAX_DELAY) == pdTRUE) {
+    if (debounce_mutex != NULL && debounce_timers != NULL && last_publish_us != NULL &&
+        xSemaphoreTake(debounce_mutex, portMAX_DELAY) == pdTRUE) {
         for (int i = 0; i < MAX_SENSORS; i++) {
             if (debounce_timers[i] != NULL) {
                 esp_timer_stop(debounce_timers[i]);
@@ -521,5 +546,17 @@ void mqtt_publisher_cleanup(void)
         xSemaphoreGive(debounce_mutex);
         vSemaphoreDelete(debounce_mutex);
         debounce_mutex = NULL;
+    }
+
+    if (last_publish_us != NULL) {
+        free(last_publish_us);
+        atomic_fetch_add(&free_count_mqtt_publisher, 1);
+        last_publish_us = NULL;
+    }
+
+    if (debounce_timers != NULL) {
+        free(debounce_timers);
+        atomic_fetch_add(&free_count_mqtt_publisher, 1);
+        debounce_timers = NULL;
     }
 }

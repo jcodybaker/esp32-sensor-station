@@ -68,9 +68,11 @@ static esp_err_t pump_dispense_ml_param_parser(httpd_req_t *req, int *out_amount
     char param[16];
     if (httpd_query_key_value(buf, "ml", param, sizeof(param)) != ESP_OK) {
         free(buf);
+        atomic_fetch_add(&free_count_pump, 1);
         return ESP_OK;
     }
     free(buf);
+    atomic_fetch_add(&free_count_pump, 1);
 
     // Convert to integer and validate range
     *out_amount = atoi(param);
@@ -426,6 +428,8 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     esp_err_t err = i2c_new_master_bus(&i2c_bus_config, &pump_ctx->bus_handle);
     if (err != ESP_OK) {
         PUMP_ERROR_RETURN("Failed to create new I2C master bus");
+        free(pump_ctx);
+        atomic_fetch_add(&free_count_pump, 1);
         return;
     }
 
@@ -437,18 +441,30 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     err = i2c_master_bus_add_device(pump_ctx->bus_handle, &dev_cfg, &pump_ctx->dev_handle);
     if (err != ESP_OK) {
         PUMP_ERROR_RETURN("Failed to add I2C device to bus");
+        i2c_del_master_bus(pump_ctx->bus_handle);
+        free(pump_ctx);
+        atomic_fetch_add(&free_count_pump, 1);
         return;
     }
 
     pump_ctx->xSemaphore = xSemaphoreCreateMutex();
     if (pump_ctx->xSemaphore == NULL) {
         PUMP_ERROR_RETURN("Failed to create semaphore for pump");
+        i2c_master_bus_rm_device(pump_ctx->dev_handle);
+        i2c_del_master_bus(pump_ctx->bus_handle);
+        free(pump_ctx);
+        atomic_fetch_add(&free_count_pump, 1);
         return;
     }
 
     const char *response = pump_send_cmd(pump_ctx, "I");
     if (response == NULL) {
         PUMP_ERROR_RETURN("Failed to communicate with pump during initialization");
+        vSemaphoreDelete(pump_ctx->xSemaphore);
+        i2c_master_bus_rm_device(pump_ctx->dev_handle);
+        i2c_del_master_bus(pump_ctx->bus_handle);
+        free(pump_ctx);
+        atomic_fetch_add(&free_count_pump, 1);
         return;
     }
     ESP_LOGI(TAG, "Pump initialized successfully, firmware version: %s", response);
