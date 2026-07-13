@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <inttypes.h>
+#include <stdarg.h>
 
 static const char *TAG = "sensors";
 
@@ -165,67 +166,78 @@ static esp_err_t sensors_display_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static esp_err_t sensors_data_handler(httpd_req_t *req) {
-    // Build JSON response with all sensors
-    char *json_buf = malloc(2048); // Allocate buffer for JSON
-    atomic_fetch_add(&malloc_count_sensors, 1);
-    if (json_buf == NULL) {
-        httpd_resp_send_500(req);
+// Worst-case single chunk is one sensor's JSON object: name (40) + unit (16)
+// + a generously-bounded value/timestamp rendering (48 + 20) + "available"
+// (5) + link_url (64) + link_text (32) + surrounding literal/punctuation
+// (~90). That totals ~315 bytes; 512 matches the per-item chunk size already
+// used in bthome_observer.c for the same kind of reused-buffer pattern.
+#define SENSORS_JSON_CHUNK_BUF_SIZE 512
+
+// Formats into a small stack buffer and sends it as one HTTP chunk, so the
+// response can grow with the sensor count without needing a buffer sized
+// for the whole response.
+static esp_err_t sensors_data_emit(httpd_req_t *req, const char *fmt, ...) {
+    char buf[SENSORS_JSON_CHUNK_BUF_SIZE];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (len < 0) {
         return ESP_FAIL;
     }
-    
+    if (len >= (int)sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
+    return httpd_resp_send_chunk(req, buf, len);
+}
+
+static esp_err_t sensors_data_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Connection", "keep-alive");
+
     if (sensors_mutex != NULL) {
         xSemaphoreTake(sensors_mutex, portMAX_DELAY);
     }
-    
-    int pos = snprintf(json_buf, 2048, "{\"sensors\":[");
+
+    esp_err_t err = sensors_data_emit(req, "{\"sensors\":[");
+
     bool first = true;
-    for (int i = 0; i < sensor_count && pos < 2000; i++) {
+    for (int i = 0; i < sensor_count && err == ESP_OK; i++) {
         if (sensors[i].display_name[0] == '\0' || sensors[i].unit[0] == '\0') {
             continue;
         }
-        if (!first) {
-            pos += snprintf(json_buf + pos, 2048 - pos, ",");
-        }
-        first = false;
-        
-        // Build JSON object for this sensor
-        char sensor_json[512];
-        int spos = snprintf(sensor_json, sizeof(sensor_json),
-                       "{\"name\":\"%s\",\"unit\":\"%s\",\"value\":%.2f,\"last_updated\":%" PRId64 ",\"available\":%s",
+
+        bool has_link = sensors[i].link_url[0] != '\0' && sensors[i].link_text[0] != '\0';
+
+        err = sensors_data_emit(req,
+                       "%s{\"name\":\"%s\",\"unit\":\"%s\",\"value\":%.2f,\"last_updated\":%" PRId64 ",\"available\":%s%s%s%s%s%s}",
+                       first ? "" : ",",
                        sensors[i].display_name,
                        sensors[i].unit,
                        sensors[i].value,
                        (int64_t)sensors[i].last_updated,
-                       sensors[i].available ? "true" : "false");
-        
-        // Add optional link fields if present
-        if (sensors[i].link_url[0] != '\0' && sensors[i].link_text[0] != '\0') {
-            spos += snprintf(sensor_json + spos, sizeof(sensor_json) - spos,
-                           ",\"link_url\":\"%s\",\"link_text\":\"%s\"",
-                           sensors[i].link_url,
-                           sensors[i].link_text);
-        }
-        
-        spos += snprintf(sensor_json + spos, sizeof(sensor_json) - spos, "}");
-        
-        // Append to main buffer
-        pos += snprintf(json_buf + pos, 2048 - pos, "%s", sensor_json);
+                       sensors[i].available ? "true" : "false",
+                       has_link ? ",\"link_url\":\"" : "",
+                       has_link ? sensors[i].link_url : "",
+                       has_link ? "\",\"link_text\":\"" : "",
+                       has_link ? sensors[i].link_text : "",
+                       has_link ? "\"" : "");
+        first = false;
     }
-    
-    pos += snprintf(json_buf + pos, 2048 - pos, "]}");
-    
+
+    if (err == ESP_OK) {
+        err = sensors_data_emit(req, "]}");
+    }
+
     if (sensors_mutex != NULL) {
         xSemaphoreGive(sensors_mutex);
     }
-    
-    httpd_resp_set_status(req, HTTPD_200);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Connection", "keep-alive");
-    httpd_resp_send(req, json_buf, strlen(json_buf));
-    free(json_buf);
-    atomic_fetch_add(&free_count_sensors, 1);
-    return ESP_OK;
+
+    // Terminate the chunked response
+    httpd_resp_send_chunk(req, NULL, 0);
+
+    return err;
 }
 
 static esp_err_t version_handler(httpd_req_t *req) {
