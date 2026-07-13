@@ -36,7 +36,7 @@ static void rcwl9620_task(void *pvParameters) {
             }
             sensors_update(sensor_id_cm, 0.0f, false);
         } else {
-            ESP_LOGI(TAG, "Distance: %" PRIu32 " cm", distance_cm);
+            ESP_LOGD(TAG, "Distance: %" PRIu32 " cm", distance_cm);
             sensors_update(sensor_id_cm, (float)distance_cm, true);
         }
 

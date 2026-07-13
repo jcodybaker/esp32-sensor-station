@@ -69,9 +69,9 @@ void run_ds18b20(void *pvParameters) {
             
             const char *name = device_settings ? settings_get_ds18b20_name(device_settings, ds18b20s[i].address) : NULL;
             if (name && strlen(name) > 0) {
-                ESP_LOGI(TAG, "temperature read from DS18B20 '%s' [%016llX]: %.2f%s", name, ds18b20s[i].address, display_temp, unit);
+                ESP_LOGD(TAG, "temperature read from DS18B20 '%s' [%016llX]: %.2f%s", name, ds18b20s[i].address, display_temp, unit);
             } else {
-                ESP_LOGI(TAG, "temperature read from DS18B20[%d] [%016llX]: %.2f%s", i, ds18b20s[i].address, display_temp, unit);
+                ESP_LOGD(TAG, "temperature read from DS18B20[%d] [%016llX]: %.2f%s", i, ds18b20s[i].address, display_temp, unit);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

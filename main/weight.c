@@ -102,7 +102,7 @@ static void weight(void *pvParameters)
             data = readings[CONFIG_WEIGHT_SAMPLE_TIMES / 2];
         }
 
-        ESP_LOGI(TAG, "Raw data: %" PRIi32, data);
+        ESP_LOGD(TAG, "Raw data: %" PRIi32, data);
 
         // Store the latest weight reading
         g_latest_weight_raw = data;
