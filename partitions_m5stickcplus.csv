@@ -1,0 +1,11 @@
+# Name,   Type, SubType, Offset,   Size, Flags
+# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+#
+# Same two-OTA-slot layout as the default esp32 build (partitions_two_ota_large.csv),
+# but with each app slot enlarged since the M5GFX/M5Unified display stack leaves much
+# less headroom in the stock 1700K slot size.
+nvs,      data, nvs,     ,        0x6000,
+otadata,  data, ota,     ,        0x2000,
+phy_init, data, phy,     ,        0x1000,
+ota_0,    app,  ota_0,   ,        1900K,
+ota_1,    app,  ota_1,   ,        1900K,

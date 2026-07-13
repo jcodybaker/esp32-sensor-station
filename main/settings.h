@@ -58,6 +58,7 @@ typedef struct {
     char *mqtt_topic;                  // MQTT topic for sensor updates (default: station/sensor)
     char *mqtt_status_topic;           // MQTT topic for status updates (default: station/status)
     uint16_t mqtt_debounce_seconds;    // Minimum seconds between per-sensor MQTT publishes (0 = disabled, default 10)
+    uint8_t lcd_brightness;            // M5StickC Plus LCD backlight brightness (0-255)
 } settings_t;
 
 esp_err_t settings_init(settings_t *settings);

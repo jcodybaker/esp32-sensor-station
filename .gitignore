@@ -1,4 +1,7 @@
 build/
+build_*/
 managed_components/
 sdkconfig.old
+sdkconfig.*.generated
+sdkconfig.*.merged
 .vscode/

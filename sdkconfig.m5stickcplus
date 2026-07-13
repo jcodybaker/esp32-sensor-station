@@ -1,0 +1,15 @@
+CONFIG_ENABLE_M5STICKC_DISPLAY=y
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_RTTI=y
+# M5GFX's SPI-driven display code pushes the app over the IRAM budget;
+# moving the SPI master ISR out of IRAM (small latency cost, not a concern
+# for a periodically-updated sensor display) reclaims enough to fit.
+# CONFIG_SPI_MASTER_ISR_IN_IRAM is not set
+
+# The M5GFX/M5Unified display stack leaves little headroom in the stock
+# 1700K OTA app slots (partitions_two_ota_large.csv), so use a dedicated
+# partition table with larger slots for this build variant.
+# CONFIG_PARTITION_TABLE_TWO_OTA_LARGE is not set
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_m5stickcplus.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_m5stickcplus.csv"

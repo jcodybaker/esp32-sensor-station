@@ -54,12 +54,72 @@ jobs:
         echo "**Target:** ESP32" >> $GITHUB_STEP_SUMMARY
         echo "**ESP-IDF:** v5.5.1" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
+
         if [ -f "build/weight.bin" ]; then
           SIZE=$(stat -f%z "build/weight.bin" 2>/dev/null || stat -c%s "build/weight.bin")
           echo "**Application Size:** $(numfmt --to=iec-i --suffix=B $SIZE)" >> $GITHUB_STEP_SUMMARY
         fi
-        
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "Build artifacts have been uploaded and can be downloaded from the workflow run." >> $GITHUB_STEP_SUMMARY
+
+  build-m5stickcplus:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: Merge M5StickC Plus sdkconfig fragment
+      run: cat sdkconfig sdkconfig.m5stickcplus > sdkconfig.m5stickcplus.merged
+
+    - name: Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.5.1
+        target: esp32
+        command: idf.py -D SDKCONFIG=sdkconfig.m5stickcplus.generated -D SDKCONFIG_DEFAULTS=sdkconfig.m5stickcplus.merged build
+
+    - name: Get project version
+      id: version
+      run: |
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev-$(git rev-parse --short HEAD)")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    - name: Prepare artifacts
+      run: |
+        mkdir -p artifacts
+        cp build/weight.bin artifacts/
+        cp build/bootloader/bootloader.bin artifacts/
+        cp build/partition_table/partition-table.bin artifacts/
+        cp build/flash_project_args artifacts/
+        cp build/flasher_args.json artifacts/
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp32-sensor-station-m5stickcplus-${{ steps.version.outputs.version }}
+        path: artifacts/
+        retention-days: 90
+
+    - name: Build summary
+      run: |
+        echo "## Build Summary (M5StickC Plus)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Target:** ESP32 (M5StickC Plus, LCD display enabled)" >> $GITHUB_STEP_SUMMARY
+        echo "**ESP-IDF:** v5.5.1" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ -f "build/weight.bin" ]; then
+          SIZE=$(stat -f%z "build/weight.bin" 2>/dev/null || stat -c%s "build/weight.bin")
+          echo "**Application Size:** $(numfmt --to=iec-i --suffix=B $SIZE)" >> $GITHUB_STEP_SUMMARY
+        fi
+
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "Build artifacts have been uploaded and can be downloaded from the workflow run." >> $GITHUB_STEP_SUMMARY

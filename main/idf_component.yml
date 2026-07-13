@@ -20,3 +20,5 @@ dependencies:
   espressif/ds18b20: ^0.2.0
   espressif/onewire_bus: ^1.0.4
   esp-idf-lib/ultrasonic: ^1.1.0
+  m5stack/m5gfx: ^0.2.9
+  m5stack/m5unified: ^0.2.7

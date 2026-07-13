@@ -220,3 +220,24 @@ menu "Atlas Scientific EZO pH Sensor Configuration"
         help
             Factory-default I2C address of the Atlas Scientific EZO pH circuit.
 endmenu
+
+menu "M5StickC Plus Display Configuration"
+
+    config ENABLE_M5STICKC_DISPLAY
+        bool "Enable M5StickC Plus LCD display support"
+        default n
+        help
+            Enables sensor readings to be shown on the built-in LCD of an M5StickC Plus
+            (M5GFX + M5Unified, including IMU-based orientation). This pulls in the
+            m5stack/m5gfx and m5stack/m5unified components and requires C++ exceptions
+            and RTTI to be enabled, so it is intended for a dedicated M5StickC Plus
+            firmware build rather than the default sensor station build.
+
+    config M5STICKC_DISPLAY_DEFAULT_BRIGHTNESS
+        int "Default LCD brightness (0-255)"
+        range 0 255
+        default 128
+        depends on ENABLE_M5STICKC_DISPLAY
+        help
+            Default LCD backlight brightness used until overridden in Settings.
+endmenu

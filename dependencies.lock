@@ -95,7 +95,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.1
+    version: 5.5.4
   jcodybaker/bthome:
     component_hash: 7c13de6598aebee90f6598f60c03ec7e4ffb37d2e97606aa80df00373eec7263
     dependencies: []
@@ -103,6 +103,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 0.0.5
+  m5stack/m5gfx:
+    component_hash: 9d500616e26fa94f90819df866321f36a21b5bd66e01ae7a62860b21a295848f
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.25
+  m5stack/m5unified:
+    component_hash: a83244457e5a699b0a39ad879d0ddf93f210cd40a4f02d34187fe1bb9660d8c7
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.18
 direct_dependencies:
 - esp-idf-lib/hx711
 - esp-idf-lib/ultrasonic
@@ -111,6 +125,8 @@ direct_dependencies:
 - espressif/onewire_bus
 - idf
 - jcodybaker/bthome
-manifest_hash: 4dfae5ff7d0bc8c5dfd72f59af721251a5b3fe9f85e44533cb63c953b3835c48
+- m5stack/m5gfx
+- m5stack/m5unified
+manifest_hash: 70b54b5412350c70d0ac1b698c742d0b4af4ce9d533ffae5cc5025fdad0fb4b3
 target: esp32
 version: 2.0.0

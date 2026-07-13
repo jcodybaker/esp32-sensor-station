@@ -331,6 +331,17 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->mqtt_debounce_seconds);
     httpd_resp_sendstr_chunk(req, buffer);
 
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    // Send lcd_brightness with current value
+    snprintf(buffer, 1024,
+        "<hr class='major'/>\n"
+        "<h2>M5StickC Plus Display Configuration</h2>\n"
+        "<label for='lcd_brightness'>LCD Brightness (0-255):</label>\n"
+        "<input type='number' id='lcd_brightness' name='lcd_brightness' value='%u' min='0' max='255'>\n",
+        settings->lcd_brightness);
+    httpd_resp_sendstr_chunk(req, buffer);
+#endif
+
     // Send weight_tare with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
@@ -1508,6 +1519,29 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    // Check and update lcd_brightness
+    if (httpd_query_key_value(query_buf, "lcd_brightness", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int32_t lcd_brightness = atoi(param_buf);
+        if (lcd_brightness < 0 || lcd_brightness > 255) {
+            ESP_LOGW(TAG, "Invalid lcd_brightness value: %ld, must be 0-255", (long)lcd_brightness);
+        } else if (lcd_brightness == settings->lcd_brightness) {
+            ESP_LOGI(TAG, "LCD brightness unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0 && lcd_brightness >= 0 && lcd_brightness <= 255) {
+            err = nvs_set_u8(settings_handle, "lcd_brightness", (uint8_t)lcd_brightness);
+            if (err == ESP_OK) {
+                settings->lcd_brightness = (uint8_t)lcd_brightness;
+                updated = true;
+                ESP_LOGI(TAG, "Updated lcd_brightness to %u", settings->lcd_brightness);
+            } else {
+                ESP_LOGE(TAG, "Failed to write lcd_brightness to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+#endif
+
     // Check and update hostname
     if (httpd_query_key_value(query_buf, "hostname", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -2020,6 +2054,11 @@ esp_err_t settings_init(settings_t *settings)
     settings->mqtt_topic = NULL;
     settings->mqtt_status_topic = NULL;
     settings->mqtt_debounce_seconds = 10;  // Default 10 second per-sensor publish interval
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    settings->lcd_brightness = CONFIG_M5STICKC_DISPLAY_DEFAULT_BRIGHTNESS;
+#else
+    settings->lcd_brightness = 0;
+#endif
     // Open NVS handle
     ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t settings_handle;
@@ -2801,6 +2840,25 @@ esp_err_t settings_init(settings_t *settings)
             ESP_LOGE(TAG, "Error (%s) reading mqtt_debounce_seconds!", esp_err_to_name(err));
             return err;
     }
+
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    ESP_LOGI(TAG, "Reading 'lcd_brightness' from NVS...");
+    uint8_t lcd_brightness_value;
+    err = nvs_get_u8(settings_handle, "lcd_brightness", &lcd_brightness_value);
+    switch (err) {
+        case ESP_OK:
+            settings->lcd_brightness = lcd_brightness_value;
+            ESP_LOGI(TAG, "Read 'lcd_brightness' = %u", settings->lcd_brightness);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->lcd_brightness = CONFIG_M5STICKC_DISPLAY_DEFAULT_BRIGHTNESS;
+            ESP_LOGI(TAG, "No value for 'lcd_brightness'; using default = %u", settings->lcd_brightness);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading lcd_brightness!", esp_err_to_name(err));
+            return err;
+    }
+#endif
 
     nvs_close(settings_handle);
     return ESP_OK;
