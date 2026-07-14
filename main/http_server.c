@@ -23,6 +23,12 @@ typedef struct {
 
 #define HTTPD_401      "401 UNAUTHORIZED"           /*!< HTTP Response 401 */
 
+// Distinct from ESP_FAIL (and any other esp_err_t a wrapped handler might
+// return) so http_metrics_handler_wrapper can count 401s separately from
+// other handler failures. Never sent to httpd's core dispatch logic as
+// anything but "non-ESP_OK" - the specific value only matters to us.
+#define HTTPD_ERR_UNAUTHORIZED ((esp_err_t)0x8001)
+
 static char *http_auth_basic(const char *username, const char *password)
 {
     size_t out;
@@ -101,7 +107,7 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
             atomic_fetch_add(&free_count_http_server, 1);
             free(buf);
             atomic_fetch_add(&free_count_http_server, 1);
-            return ESP_FAIL;
+            return HTTPD_ERR_UNAUTHORIZED;
         } else {
             ESP_LOGI(TAG, "Authenticated!");
             req->user_ctx = wrapper->user_ctx;
@@ -117,7 +123,7 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Connection", "keep-alive");
         httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Weight\"");
         httpd_resp_send(req, NULL, 0);
-        return ESP_FAIL;
+        return HTTPD_ERR_UNAUTHORIZED;
     }
 
     return ESP_OK;
@@ -171,6 +177,7 @@ typedef struct {
     char method[8];
     atomic_uint_fast32_t total_count;
     atomic_uint_fast32_t failed_count;
+    atomic_uint_fast32_t unauthorized_count;
 } http_route_metric_t;
 
 typedef struct {
@@ -200,6 +207,7 @@ static http_route_metric_t *http_route_metric_get_or_create(const char *uri, con
     slot->method[sizeof(slot->method) - 1] = '\0';
     atomic_init(&slot->total_count, 0);
     atomic_init(&slot->failed_count, 0);
+    atomic_init(&slot->unauthorized_count, 0);
     return slot;
 }
 
@@ -211,7 +219,9 @@ static esp_err_t http_metrics_handler_wrapper(httpd_req_t *req) {
     req->user_ctx = wrap->user_ctx;
     esp_err_t result = wrap->handler(req);
 
-    if (result != ESP_OK) {
+    if (result == HTTPD_ERR_UNAUTHORIZED) {
+        atomic_fetch_add(&wrap->metric->unauthorized_count, 1);
+    } else if (result != ESP_OK) {
         atomic_fetch_add(&wrap->metric->failed_count, 1);
     }
     return result;
@@ -263,6 +273,7 @@ void http_metrics_route_get(int index, http_route_metric_snapshot_t *out) {
     out->method = http_route_metrics[index].method;
     out->total_count = atomic_load(&http_route_metrics[index].total_count);
     out->failed_count = atomic_load(&http_route_metrics[index].failed_count);
+    out->unauthorized_count = atomic_load(&http_route_metrics[index].unauthorized_count);
 }
 
 httpd_handle_t http_server_init(void)

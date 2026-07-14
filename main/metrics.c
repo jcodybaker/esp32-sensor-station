@@ -279,7 +279,7 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
 
     if (err == ESP_OK) {
         err = metrics_emit(req, buf,
-                          "# HELP http_requests_failed_total Total HTTP requests that resulted in an error response, per route\n"
+                          "# HELP http_requests_failed_total Total HTTP requests that resulted in a non-auth error response, per route\n"
                           "# TYPE http_requests_failed_total counter\n");
     }
     for (int i = 0; i < http_route_count && err == ESP_OK; i++) {
@@ -288,6 +288,19 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
         err = metrics_emit(req, buf,
                           "http_requests_failed_total{hostname=\"%s\",method=\"%s\",uri=\"%s\"} %lu\n",
                           hostname, route.method, route.uri, (unsigned long)route.failed_count);
+    }
+
+    if (err == ESP_OK) {
+        err = metrics_emit(req, buf,
+                          "# HELP http_requests_unauthorized_total Total HTTP requests rejected with 401 Unauthorized, per route\n"
+                          "# TYPE http_requests_unauthorized_total counter\n");
+    }
+    for (int i = 0; i < http_route_count && err == ESP_OK; i++) {
+        http_route_metric_snapshot_t route;
+        http_metrics_route_get(i, &route);
+        err = metrics_emit(req, buf,
+                          "http_requests_unauthorized_total{hostname=\"%s\",method=\"%s\",uri=\"%s\"} %lu\n",
+                          hostname, route.method, route.uri, (unsigned long)route.unauthorized_count);
     }
 
     // Terminate the chunked response
