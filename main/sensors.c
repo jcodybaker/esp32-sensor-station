@@ -2,6 +2,7 @@
 #include "settings.h"
 #include "metrics.h"
 #include "mqtt_publisher.h"
+#include "http_server.h"
 #include <esp_log.h>
 #include <esp_http_server.h>
 #include <esp_app_format.h>
@@ -486,17 +487,17 @@ void sensors_init(settings_t *settings, httpd_handle_t server)
     sensors_display_uri.user_ctx = settings;
     
     // Register HTTP handlers
-    esp_err_t err = httpd_register_uri_handler(server, &sensors_display_uri);
+    esp_err_t err = httpd_register_uri_handler_instrumented(server, &sensors_display_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering sensor display handler!", esp_err_to_name(err));
     }
-    
-    err = httpd_register_uri_handler(server, &sensors_data_uri);
+
+    err = httpd_register_uri_handler_instrumented(server, &sensors_data_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering sensor data handler!", esp_err_to_name(err));
     }
-    
-    err = httpd_register_uri_handler(server, &version_uri);
+
+    err = httpd_register_uri_handler_instrumented(server, &version_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering version handler!", esp_err_to_name(err));
     }

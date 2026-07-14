@@ -1,6 +1,7 @@
 #include "metrics.h"
 #include "wifi.h"
 #include "sensors.h"
+#include "http_server.h"
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
@@ -261,6 +262,34 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
                           hostname, atomic_load(&free_count_mqtt_publisher));
     }
 
+    // HTTP request/outcome metrics, one series per (method, uri) route
+    if (err == ESP_OK) {
+        err = metrics_emit(req, buf,
+                          "# HELP http_requests_total Total HTTP requests received, per route\n"
+                          "# TYPE http_requests_total counter\n");
+    }
+    int http_route_count = http_metrics_route_count();
+    for (int i = 0; i < http_route_count && err == ESP_OK; i++) {
+        http_route_metric_snapshot_t route;
+        http_metrics_route_get(i, &route);
+        err = metrics_emit(req, buf,
+                          "http_requests_total{hostname=\"%s\",method=\"%s\",uri=\"%s\"} %lu\n",
+                          hostname, route.method, route.uri, (unsigned long)route.total_count);
+    }
+
+    if (err == ESP_OK) {
+        err = metrics_emit(req, buf,
+                          "# HELP http_requests_failed_total Total HTTP requests that resulted in an error response, per route\n"
+                          "# TYPE http_requests_failed_total counter\n");
+    }
+    for (int i = 0; i < http_route_count && err == ESP_OK; i++) {
+        http_route_metric_snapshot_t route;
+        http_metrics_route_get(i, &route);
+        err = metrics_emit(req, buf,
+                          "http_requests_failed_total{hostname=\"%s\",method=\"%s\",uri=\"%s\"} %lu\n",
+                          hostname, route.method, route.uri, (unsigned long)route.failed_count);
+    }
+
     // Terminate the chunked response
     httpd_resp_send_chunk(req, NULL, 0);
 
@@ -278,7 +307,7 @@ static httpd_uri_t metrics_uri = {
 
 void metrics_init(settings_t *settings, httpd_handle_t server) {
     metrics_uri.user_ctx = settings;
-    esp_err_t err = httpd_register_uri_handler(server, &metrics_uri);
+    esp_err_t err = httpd_register_uri_handler_instrumented(server, &metrics_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering metrics handler!", esp_err_to_name(err));
     } else {

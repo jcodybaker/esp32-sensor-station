@@ -8,6 +8,7 @@
 #include "esp_tls.h"
 #include "settings.h"
 #include "metrics.h"
+#include "http_server.h"
 
 
 // Shamelessly borrowed from https://github.com/espressif/esp-idf/blob/v5.5.1/examples/protocols/http_server/simple/main/main.c
@@ -96,6 +97,11 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
             httpd_resp_set_hdr(req, "Connection", "keep-alive");
             httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Weight\"");
             httpd_resp_send(req, NULL, 0);
+            free(auth_credentials);
+            atomic_fetch_add(&free_count_http_server, 1);
+            free(buf);
+            atomic_fetch_add(&free_count_http_server, 1);
+            return ESP_FAIL;
         } else {
             ESP_LOGI(TAG, "Authenticated!");
             req->user_ctx = wrapper->user_ctx;
@@ -105,16 +111,13 @@ static esp_err_t basic_auth_get_handler(httpd_req_t *req)
             atomic_fetch_add(&free_count_http_server, 1);
             return wrapper->handler(req);
         }
-        free(auth_credentials);
-        atomic_fetch_add(&free_count_http_server, 1);
-        free(buf);
-        atomic_fetch_add(&free_count_http_server, 1);
     } else {
         ESP_LOGE(TAG, "No auth header received");
         httpd_resp_set_status(req, HTTPD_401);
         httpd_resp_set_hdr(req, "Connection", "keep-alive");
         httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Weight\"");
         httpd_resp_send(req, NULL, 0);
+        return ESP_FAIL;
     }
 
     return ESP_OK;
@@ -147,7 +150,119 @@ esp_err_t httpd_register_uri_handler_with_basic_auth(void *settings_ptr, httpd_h
     wrapped_uri_handler->user_ctx = wrapper;
     wrapped_uri_handler->handler = basic_auth_get_handler;
 
+    // Instrument the auth-wrapped handler rather than registering it
+    // directly, so a 401 (returned as ESP_FAIL by basic_auth_get_handler)
+    // is counted as a failed request just like any other handler error.
+    return httpd_register_uri_handler_instrumented(server, wrapped_uri_handler);
+}
+
+// --- Per-route request/outcome metrics -------------------------------------
+//
+// Route slots are only ever created while handlers are being registered at
+// boot, before the httpd is serving requests concurrently from other tasks,
+// so http_route_metric_count and the slot array need no locking. The counts
+// within a slot are atomic since requests are served from httpd's worker
+// tasks after boot.
+
+#define HTTP_METRICS_MAX_ROUTES 24
+
+typedef struct {
+    char uri[40];
+    char method[8];
+    atomic_uint_fast32_t total_count;
+    atomic_uint_fast32_t failed_count;
+} http_route_metric_t;
+
+typedef struct {
+    esp_err_t (*handler)(httpd_req_t *r);
+    void *user_ctx;
+    http_route_metric_t *metric;
+} http_metrics_wrap_t;
+
+static http_route_metric_t http_route_metrics[HTTP_METRICS_MAX_ROUTES];
+static int http_route_metric_count = 0;
+
+static http_route_metric_t *http_route_metric_get_or_create(const char *uri, const char *method) {
+    for (int i = 0; i < http_route_metric_count; i++) {
+        if (strcmp(http_route_metrics[i].uri, uri) == 0 &&
+            strcmp(http_route_metrics[i].method, method) == 0) {
+            return &http_route_metrics[i];
+        }
+    }
+    if (http_route_metric_count >= HTTP_METRICS_MAX_ROUTES) {
+        ESP_LOGW(TAG, "HTTP metrics route table full, not tracking %s %s", method, uri);
+        return NULL;
+    }
+    http_route_metric_t *slot = &http_route_metrics[http_route_metric_count++];
+    strncpy(slot->uri, uri, sizeof(slot->uri) - 1);
+    slot->uri[sizeof(slot->uri) - 1] = '\0';
+    strncpy(slot->method, method, sizeof(slot->method) - 1);
+    slot->method[sizeof(slot->method) - 1] = '\0';
+    atomic_init(&slot->total_count, 0);
+    atomic_init(&slot->failed_count, 0);
+    return slot;
+}
+
+static esp_err_t http_metrics_handler_wrapper(httpd_req_t *req) {
+    http_metrics_wrap_t *wrap = (http_metrics_wrap_t *)req->user_ctx;
+
+    atomic_fetch_add(&wrap->metric->total_count, 1);
+
+    req->user_ctx = wrap->user_ctx;
+    esp_err_t result = wrap->handler(req);
+
+    if (result != ESP_OK) {
+        atomic_fetch_add(&wrap->metric->failed_count, 1);
+    }
+    return result;
+}
+
+esp_err_t httpd_register_uri_handler_instrumented(httpd_handle_t server, httpd_uri_t *uri_handler) {
+    const char *method_str = http_method_str(uri_handler->method);
+    http_route_metric_t *metric = http_route_metric_get_or_create(uri_handler->uri, method_str);
+    if (metric == NULL) {
+        // Route table is full; register the handler unmodified rather than
+        // dropping the route entirely.
+        return httpd_register_uri_handler(server, uri_handler);
+    }
+
+    http_metrics_wrap_t *wrap = malloc(sizeof(http_metrics_wrap_t));
+    atomic_fetch_add(&malloc_count_http_server, 1);
+    if (!wrap) {
+        ESP_LOGE(TAG, "No enough memory for http metrics wrapper");
+        return httpd_register_uri_handler(server, uri_handler);
+    }
+    wrap->handler = uri_handler->handler;
+    wrap->user_ctx = uri_handler->user_ctx;
+    wrap->metric = metric;
+
+    httpd_uri_t *wrapped_uri_handler = malloc(sizeof(httpd_uri_t));
+    atomic_fetch_add(&malloc_count_http_server, 1);
+    if (!wrapped_uri_handler) {
+        ESP_LOGE(TAG, "No enough memory for wrapped URI handler");
+        free(wrap);
+        atomic_fetch_add(&free_count_http_server, 1);
+        return httpd_register_uri_handler(server, uri_handler);
+    }
+    memcpy(wrapped_uri_handler, uri_handler, sizeof(httpd_uri_t));
+    wrapped_uri_handler->user_ctx = wrap;
+    wrapped_uri_handler->handler = http_metrics_handler_wrapper;
+
     return httpd_register_uri_handler(server, wrapped_uri_handler);
+}
+
+int http_metrics_route_count(void) {
+    return http_route_metric_count;
+}
+
+void http_metrics_route_get(int index, http_route_metric_snapshot_t *out) {
+    if (out == NULL || index < 0 || index >= http_route_metric_count) {
+        return;
+    }
+    out->uri = http_route_metrics[index].uri;
+    out->method = http_route_metrics[index].method;
+    out->total_count = atomic_load(&http_route_metrics[index].total_count);
+    out->failed_count = atomic_load(&http_route_metrics[index].failed_count);
 }
 
 httpd_handle_t http_server_init(void)
