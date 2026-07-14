@@ -41,10 +41,11 @@ typedef struct {
     int8_t ds18b20_pwr_gpio;           // DS18B20 power GPIO pin (-1 = disabled)
     int8_t weight_dt_gpio;           // HX711 DOUT GPIO pin (-1 = disabled)
     int8_t weight_sck_gpio;            // HX711 SCK GPIO pin (-1 = disabled)
-    int8_t pump_scl_gpio;              // Pump I2C SCL GPIO pin (-1 = disabled)
-    int8_t pump_sda_gpio;              // Pump I2C SDA GPIO pin (-1 = disabled)
+    int8_t sensor_i2c_scl_gpio;        // Shared I2C bus SCL GPIO pin, used by pump/EZO devices (-1 = disabled)
+    int8_t sensor_i2c_sda_gpio;        // Shared I2C bus SDA GPIO pin, used by pump/EZO devices (-1 = disabled)
     int8_t pump_i2c_addr;              // Pump I2C device address
     int16_t pump_dispense_ml;          // Amount to dispense in ml
+    int8_t ezo_ph_i2c_addr;            // Atlas Scientific EZO pH I2C device address (0 = disabled), shares the sensor I2C bus
     int8_t rcwl9620_trigger_gpio;       // RCWL-9620 ultrasonic sensor trigger GPIO pin (-1 = disabled)
     int8_t rcwl9620_echo_gpio;          // RCWL-9620 ultrasonic sensor echo GPIO pin (-1 = disabled)
     int8_t a02yyuw_rx_gpio;             // A02YYUW ultrasonic sensor UART RX GPIO pin (-1 = disabled)

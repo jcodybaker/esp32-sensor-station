@@ -40,6 +40,34 @@ typedef struct {
     int total_volume_sensor_id;
 } pump_context_t;
 
+// Shared I2C bus for Atlas Scientific EZO circuits. Atlas EZO devices (pump,
+// pH probe, EC probe, etc.) are designed to be chained on one physical I2C
+// bus at different addresses, so the bus is created once here (using the
+// shared sensor I2C SCL/SDA GPIO settings) and other drivers attach their
+// own devices to it via pump_get_i2c_bus() rather than each creating their
+// own bus.
+static i2c_master_bus_handle_t s_i2c_bus_handle = NULL;
+
+i2c_master_bus_handle_t pump_get_i2c_bus(void) {
+    return s_i2c_bus_handle;
+}
+
+static esp_err_t pump_ensure_i2c_bus(settings_t *settings) {
+    if (s_i2c_bus_handle != NULL) {
+        return ESP_OK;
+    }
+
+    i2c_master_bus_config_t i2c_bus_config = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = settings->sensor_i2c_sda_gpio,
+        .scl_io_num = settings->sensor_i2c_scl_gpio,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    return i2c_new_master_bus(&i2c_bus_config, &s_i2c_bus_handle);
+}
 
 char* pump_send_cmd(pump_context_t *pump_ctx, const char *cmd);
 
@@ -400,12 +428,12 @@ static httpd_uri_t pump_calibrate_submit_uri = {
 };
 
 void pump_init(settings_t *settings, httpd_handle_t server) {
-    if (settings->pump_scl_gpio < 0 || settings->pump_sda_gpio < 0) {
-        PUMP_ERROR_RETURN("Pump initialization skipped because weight sensor GPIOs are not configured");
+    if (settings->sensor_i2c_scl_gpio < 0 || settings->sensor_i2c_sda_gpio < 0) {
+        PUMP_ERROR_RETURN("Pump initialization skipped because the shared sensor I2C GPIOs are not configured");
         return;
     }
 
-    ESP_LOGI(TAG, "Initializing pump on SCL GPIO %d, SDA GPIO %d", settings->pump_scl_gpio, settings->pump_sda_gpio);
+    ESP_LOGI(TAG, "Initializing pump on SCL GPIO %d, SDA GPIO %d", settings->sensor_i2c_scl_gpio, settings->sensor_i2c_sda_gpio);
     pump_context_t *pump_ctx = malloc(sizeof(pump_context_t));
     atomic_fetch_add(&malloc_count_pump, 1);
     if (!pump_ctx) {
@@ -415,23 +443,14 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     pump_ctx->settings = settings;
     memset(pump_ctx->buf, 0, PUMP_BUFFER_SIZE);
 
-    // Quick and dirty I2C setup to send "FIND" to address 0x67
-    i2c_master_bus_config_t i2c_bus_config = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = settings->pump_sda_gpio,
-        .scl_io_num = settings->pump_scl_gpio,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    
-    esp_err_t err = i2c_new_master_bus(&i2c_bus_config, &pump_ctx->bus_handle);
+    esp_err_t err = pump_ensure_i2c_bus(settings);
     if (err != ESP_OK) {
         PUMP_ERROR_RETURN("Failed to create new I2C master bus");
         free(pump_ctx);
         atomic_fetch_add(&free_count_pump, 1);
         return;
     }
+    pump_ctx->bus_handle = s_i2c_bus_handle;
 
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -440,8 +459,9 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     };
     err = i2c_master_bus_add_device(pump_ctx->bus_handle, &dev_cfg, &pump_ctx->dev_handle);
     if (err != ESP_OK) {
+        // Note: the bus itself is shared with other EZO devices (e.g. the pH
+        // probe), so it is left intact here rather than deleted.
         PUMP_ERROR_RETURN("Failed to add I2C device to bus");
-        i2c_del_master_bus(pump_ctx->bus_handle);
         free(pump_ctx);
         atomic_fetch_add(&free_count_pump, 1);
         return;
@@ -451,7 +471,6 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     if (pump_ctx->xSemaphore == NULL) {
         PUMP_ERROR_RETURN("Failed to create semaphore for pump");
         i2c_master_bus_rm_device(pump_ctx->dev_handle);
-        i2c_del_master_bus(pump_ctx->bus_handle);
         free(pump_ctx);
         atomic_fetch_add(&free_count_pump, 1);
         return;
@@ -462,7 +481,6 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
         PUMP_ERROR_RETURN("Failed to communicate with pump during initialization");
         vSemaphoreDelete(pump_ctx->xSemaphore);
         i2c_master_bus_rm_device(pump_ctx->dev_handle);
-        i2c_del_master_bus(pump_ctx->bus_handle);
         free(pump_ctx);
         atomic_fetch_add(&free_count_pump, 1);
         return;

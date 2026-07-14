@@ -18,6 +18,7 @@
 #include "bthome.h"
 #include "temperature.h"
 #include "pump.h"
+#include "ezo_ph.h"
 #include "metrics.h"
 #include "mqtt_publisher.h"
 #include "ota.h"  // For OTA status
@@ -144,6 +145,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "<h1>Sensor Station Settings</h1>\n"
         "<a href='/' class=\"button\">Home</a>\n"
         "<a href='/pump/calibrate' class=\"button\">Calibrate Pump</a>\n"
+        "<a href='/ezo_ph/calibrate' class=\"button\">Calibrate EZO pH</a>\n"
         "<form action='/ota' method='POST' style='display: inline;'>\n"
         "<button type='submit'>Start OTA Update</button>\n"
         "</form>\n"
@@ -373,20 +375,20 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->weight_sck_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
 
-    // Send pump_scl_gpio with current value
+    // Send sensor_i2c_scl_gpio with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
         "<h2>Pump Configuration</h2>\n"
-        "<label for='pump_scl_gpio'>Pump I2C SCL GPIO Pin (-1 = disabled):</label>\n"
-        "<input type='number' id='pump_scl_gpio' name='pump_scl_gpio' value='%d' min='-1' max='39'>\n",
-        settings->pump_scl_gpio);
+        "<label for='sensor_i2c_scl_gpio'>I2C Bus SCL GPIO Pin (-1 = disabled, shared with EZO devices like the pH probe):</label>\n"
+        "<input type='number' id='sensor_i2c_scl_gpio' name='sensor_i2c_scl_gpio' value='%d' min='-1' max='39'>\n",
+        settings->sensor_i2c_scl_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
-    
-    // Send pump_sda_gpio with current value
+
+    // Send sensor_i2c_sda_gpio with current value
     snprintf(buffer, 1024,
-        "<label for='pump_sda_gpio'>Pump I2C SDA GPIO Pin (-1 = disabled):</label>\n"
-        "<input type='number' id='pump_sda_gpio' name='pump_sda_gpio' value='%d' min='-1' max='39'>\n",
-        settings->pump_sda_gpio);
+        "<label for='sensor_i2c_sda_gpio'>I2C Bus SDA GPIO Pin (-1 = disabled, shared with EZO devices like the pH probe):</label>\n"
+        "<input type='number' id='sensor_i2c_sda_gpio' name='sensor_i2c_sda_gpio' value='%d' min='-1' max='39'>\n",
+        settings->sensor_i2c_sda_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
     
     // Send pump_i2c_addr with current value
@@ -412,7 +414,27 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         httpd_resp_sendstr_chunk(req, pump_error);
         httpd_resp_sendstr_chunk(req, "</div>\n");
     }
-        
+
+    // Send ezo_ph_i2c_addr with current value
+    snprintf(buffer, 1024,
+        "<hr class='minor'/>\n"
+        "<h2>EZO pH Sensor Configuration</h2>\n"
+        "<p>Shares the I2C bus configured above; set a distinct I2C address for the pH probe.</p>\n"
+        "<label for='ezo_ph_i2c_addr'>EZO pH I2C Device Address (0 = disabled):</label>\n"
+        "<input type='number' id='ezo_ph_i2c_addr' name='ezo_ph_i2c_addr' value='%d' min='0' max='127'>\n",
+        settings->ezo_ph_i2c_addr);
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Display EZO pH error if set
+    const char* ezo_ph_error = ezo_ph_get_last_error();
+    if (ezo_ph_error != NULL) {
+        httpd_resp_sendstr_chunk(req,
+            "<div class='error' style='display: block; margin-top: 10px;'>\n"
+            "<strong>EZO pH Error:</strong> ");
+        httpd_resp_sendstr_chunk(req, ezo_ph_error);
+        httpd_resp_sendstr_chunk(req, "</div>\n");
+    }
+
     // Send ds18b20_gpio with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
@@ -1007,41 +1029,45 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     }
 
     
-    // Check and update pump_scl_gpio
-    if (httpd_query_key_value(query_buf, "pump_scl_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
-        int8_t pump_scl_gpio = (int8_t)atoi(param_buf);
-        if (pump_scl_gpio == settings->pump_scl_gpio) {
-            ESP_LOGI(TAG, "Pump SCL GPIO unchanged");
+    // Check and update sensor_i2c_scl_gpio
+    if (httpd_query_key_value(query_buf, "sensor_i2c_scl_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t sensor_i2c_scl_gpio = (int8_t)atoi(param_buf);
+        if (sensor_i2c_scl_gpio == settings->sensor_i2c_scl_gpio) {
+            ESP_LOGI(TAG, "Sensor I2C SCL GPIO unchanged");
             param_buf[0] = '\0'; // Clear to avoid updating
         }
         if (strlen(param_buf) > 0) {
-            err = nvs_set_i8(settings_handle, "pump_scl_gpio", pump_scl_gpio);
+            // NVS key kept as "pump_scl_gpio" (pre-dates the shared I2C bus) so
+            // existing stored GPIO configuration survives the rename.
+            err = nvs_set_i8(settings_handle, "pump_scl_gpio", sensor_i2c_scl_gpio);
             if (err == ESP_OK) {
-                settings->pump_scl_gpio = pump_scl_gpio;
+                settings->sensor_i2c_scl_gpio = sensor_i2c_scl_gpio;
                 updated = true;
-                ESP_LOGI(TAG, "Updated pump_scl_gpio to %d", pump_scl_gpio);
+                ESP_LOGI(TAG, "Updated sensor_i2c_scl_gpio to %d", sensor_i2c_scl_gpio);
             } else {
-                ESP_LOGE(TAG, "Failed to write pump_scl_gpio to NVS: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to write sensor_i2c_scl_gpio to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
         }
     }
-    
-    // Check and update pump_sda_gpio
-    if (httpd_query_key_value(query_buf, "pump_sda_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
-        int8_t pump_sda_gpio = (int8_t)atoi(param_buf);
-        if (pump_sda_gpio == settings->pump_sda_gpio) {
-            ESP_LOGI(TAG, "Pump SDA GPIO unchanged");
+
+    // Check and update sensor_i2c_sda_gpio
+    if (httpd_query_key_value(query_buf, "sensor_i2c_sda_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t sensor_i2c_sda_gpio = (int8_t)atoi(param_buf);
+        if (sensor_i2c_sda_gpio == settings->sensor_i2c_sda_gpio) {
+            ESP_LOGI(TAG, "Sensor I2C SDA GPIO unchanged");
             param_buf[0] = '\0'; // Clear to avoid updating
         }
         if (strlen(param_buf) > 0) {
-            err = nvs_set_i8(settings_handle, "pump_sda_gpio", pump_sda_gpio);
+            // NVS key kept as "pump_sda_gpio" (pre-dates the shared I2C bus) so
+            // existing stored GPIO configuration survives the rename.
+            err = nvs_set_i8(settings_handle, "pump_sda_gpio", sensor_i2c_sda_gpio);
             if (err == ESP_OK) {
-                settings->pump_sda_gpio = pump_sda_gpio;
+                settings->sensor_i2c_sda_gpio = sensor_i2c_sda_gpio;
                 updated = true;
-                ESP_LOGI(TAG, "Updated pump_sda_gpio to %d", pump_sda_gpio);
+                ESP_LOGI(TAG, "Updated sensor_i2c_sda_gpio to %d", sensor_i2c_sda_gpio);
             } else {
-                ESP_LOGE(TAG, "Failed to write pump_sda_gpio to NVS: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to write sensor_i2c_sda_gpio to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
         }
@@ -1062,6 +1088,26 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
                 ESP_LOGI(TAG, "Updated pump_i2c_addr to %d", pump_i2c_addr);
             } else {
                 ESP_LOGE(TAG, "Failed to write pump_i2c_addr to NVS: %s", esp_err_to_name(err));
+            }
+            restart_needed = true;
+        }
+    }
+
+    // Check and update ezo_ph_i2c_addr
+    if (httpd_query_key_value(query_buf, "ezo_ph_i2c_addr", param_buf, sizeof(param_buf)) == ESP_OK) {
+        int8_t ezo_ph_i2c_addr = (int8_t)atoi(param_buf);
+        if (ezo_ph_i2c_addr == settings->ezo_ph_i2c_addr) {
+            ESP_LOGI(TAG, "EZO pH I2C address unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_i8(settings_handle, "ezo_ph_i2c_addr", ezo_ph_i2c_addr);
+            if (err == ESP_OK) {
+                settings->ezo_ph_i2c_addr = ezo_ph_i2c_addr;
+                updated = true;
+                ESP_LOGI(TAG, "Updated ezo_ph_i2c_addr to %d", ezo_ph_i2c_addr);
+            } else {
+                ESP_LOGE(TAG, "Failed to write ezo_ph_i2c_addr to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
         }
@@ -1958,10 +2004,11 @@ esp_err_t settings_init(settings_t *settings)
     settings->ds18b20_pwr_gpio = -1;
     settings->weight_dt_gpio = -1;
     settings->weight_sck_gpio = -1;
-    settings->pump_scl_gpio = -1;
-    settings->pump_sda_gpio = -1;
+    settings->sensor_i2c_scl_gpio = -1;
+    settings->sensor_i2c_sda_gpio = -1;
     settings->pump_i2c_addr = 0x37;
     settings->pump_dispense_ml = 100;  // Default 100ml
+    settings->ezo_ph_i2c_addr = 0x63;
     settings->rcwl9620_trigger_gpio = -1;
     settings->rcwl9620_echo_gpio = -1;
     settings->a02yyuw_rx_gpio = -1;
@@ -2335,37 +2382,39 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
-    ESP_LOGI(TAG, "Reading 'pump_scl_gpio' from NVS...");
-    int8_t pump_scl_gpio_value;
-    err = nvs_get_i8(settings_handle, "pump_scl_gpio", &pump_scl_gpio_value);
+    // NVS keys kept as "pump_scl_gpio"/"pump_sda_gpio" (pre-date the shared
+    // I2C bus) so existing stored GPIO configuration survives the rename.
+    ESP_LOGI(TAG, "Reading 'sensor_i2c_scl_gpio' from NVS...");
+    int8_t sensor_i2c_scl_gpio_value;
+    err = nvs_get_i8(settings_handle, "pump_scl_gpio", &sensor_i2c_scl_gpio_value);
     switch (err) {
         case ESP_OK:
-            settings->pump_scl_gpio = pump_scl_gpio_value;
-            ESP_LOGI(TAG, "Read 'pump_scl_gpio' = %d", settings->pump_scl_gpio);
+            settings->sensor_i2c_scl_gpio = sensor_i2c_scl_gpio_value;
+            ESP_LOGI(TAG, "Read 'sensor_i2c_scl_gpio' = %d", settings->sensor_i2c_scl_gpio);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->pump_scl_gpio = -1;  // Disabled by default
-            ESP_LOGI(TAG, "No value for 'pump_scl_gpio'; using default = %d (disabled)", settings->pump_scl_gpio);
+            settings->sensor_i2c_scl_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'sensor_i2c_scl_gpio'; using default = %d (disabled)", settings->sensor_i2c_scl_gpio);
             break;
         default:
-            ESP_LOGE(TAG, "Error (%s) reading pump_scl_gpio!", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Error (%s) reading sensor_i2c_scl_gpio!", esp_err_to_name(err));
             return err;
     }
 
-    ESP_LOGI(TAG, "Reading 'pump_sda_gpio' from NVS...");
-    int8_t pump_sda_gpio_value;
-    err = nvs_get_i8(settings_handle, "pump_sda_gpio", &pump_sda_gpio_value);
+    ESP_LOGI(TAG, "Reading 'sensor_i2c_sda_gpio' from NVS...");
+    int8_t sensor_i2c_sda_gpio_value;
+    err = nvs_get_i8(settings_handle, "pump_sda_gpio", &sensor_i2c_sda_gpio_value);
     switch (err) {
         case ESP_OK:
-            settings->pump_sda_gpio = pump_sda_gpio_value;
-            ESP_LOGI(TAG, "Read 'pump_sda_gpio' = %d", settings->pump_sda_gpio);
+            settings->sensor_i2c_sda_gpio = sensor_i2c_sda_gpio_value;
+            ESP_LOGI(TAG, "Read 'sensor_i2c_sda_gpio' = %d", settings->sensor_i2c_sda_gpio);
             break;
         case ESP_ERR_NVS_NOT_FOUND:
-            settings->pump_sda_gpio = -1;  // Disabled by default
-            ESP_LOGI(TAG, "No value for 'pump_sda_gpio'; using default = %d (disabled)", settings->pump_sda_gpio);
+            settings->sensor_i2c_sda_gpio = -1;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'sensor_i2c_sda_gpio'; using default = %d (disabled)", settings->sensor_i2c_sda_gpio);
             break;
         default:
-            ESP_LOGE(TAG, "Error (%s) reading pump_sda_gpio!", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Error (%s) reading sensor_i2c_sda_gpio!", esp_err_to_name(err));
             return err;
     }
 
@@ -2383,6 +2432,23 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading pump_i2c_addr!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'ezo_ph_i2c_addr' from NVS...");
+    int8_t ezo_ph_i2c_addr_value;
+    err = nvs_get_i8(settings_handle, "ezo_ph_i2c_addr", &ezo_ph_i2c_addr_value);
+    switch (err) {
+        case ESP_OK:
+            settings->ezo_ph_i2c_addr = ezo_ph_i2c_addr_value;
+            ESP_LOGI(TAG, "Read 'ezo_ph_i2c_addr' = 0x%02X", settings->ezo_ph_i2c_addr);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->ezo_ph_i2c_addr = CONFIG_EZO_PH_DEFAULT_I2C_ADDR;
+            ESP_LOGI(TAG, "No value for 'ezo_ph_i2c_addr'; using default = 0x%02X", settings->ezo_ph_i2c_addr);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading ezo_ph_i2c_addr!", esp_err_to_name(err));
             return err;
     }
 

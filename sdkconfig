@@ -482,6 +482,13 @@ CONFIG_ENABLE_A02YYUW=y
 # end of A02YYUW Ultrasonic Sensor Configuration
 
 #
+# Atlas Scientific EZO pH Sensor Configuration
+#
+CONFIG_ENABLE_EZO_PH=y
+CONFIG_EZO_PH_DEFAULT_I2C_ADDR=0x63
+# end of Atlas Scientific EZO pH Sensor Configuration
+
+#
 # Compiler options
 #
 # CONFIG_COMPILER_OPTIMIZATION_DEBUG is not set

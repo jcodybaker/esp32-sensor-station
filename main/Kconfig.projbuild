@@ -201,3 +201,22 @@ menu "A02YYUW Ultrasonic Sensor Configuration"
             sensor is also disabled at runtime by default until its RX GPIO pin is
             configured in Settings.
 endmenu
+
+menu "Atlas Scientific EZO pH Sensor Configuration"
+
+    config ENABLE_EZO_PH
+        bool "Enable Atlas Scientific EZO pH sensor support"
+        default y
+        help
+            Enables support for the Atlas Scientific EZO pH circuit over I2C. Disable to
+            exclude this sensor entirely from the build. The sensor is also disabled at
+            runtime by default until the shared I2C bus (configured via the Pump I2C
+            SCL/SDA GPIO settings) and its I2C address are configured in Settings.
+
+    config EZO_PH_DEFAULT_I2C_ADDR
+        hex "Default EZO pH I2C address"
+        default 0x63
+        depends on ENABLE_EZO_PH
+        help
+            Factory-default I2C address of the Atlas Scientific EZO pH circuit.
+endmenu
