@@ -101,4 +101,23 @@ int sensors_get_count(void);
  */
 const sensor_data_t* sensors_get_by_index(int index);
 
+/**
+ * @brief Get the number of sensors meant for user-facing display
+ *
+ * Excludes sensors registered with no display_name or unit (e.g. an
+ * internal Celsius shadow reading kept only for its Prometheus metric),
+ * the same filter /sensors/data uses.
+ *
+ * @return int Number of visible sensors
+ */
+int sensors_get_visible_count(void);
+
+/**
+ * @brief Get visible sensor data by index
+ *
+ * @param index Visible sensor index (0 to sensors_get_visible_count()-1)
+ * @return const sensor_data_t* Pointer to sensor data, or NULL if index is invalid
+ */
+const sensor_data_t* sensors_get_visible_by_index(int index);
+
 #endif // SENSORS_H

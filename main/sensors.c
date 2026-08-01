@@ -440,6 +440,37 @@ const sensor_data_t* sensors_get_by_index(int index) {
     return &sensors[index];
 }
 
+static bool sensor_is_visible(const sensor_data_t *sensor) {
+    return sensor->display_name[0] != '\0' && sensor->unit[0] != '\0';
+}
+
+int sensors_get_visible_count(void) {
+    int count = 0;
+    for (int i = 0; i < sensor_count; i++) {
+        if (sensor_is_visible(&sensors[i])) {
+            count++;
+        }
+    }
+    return count;
+}
+
+const sensor_data_t* sensors_get_visible_by_index(int index) {
+    if (index < 0) {
+        return NULL;
+    }
+    int visible = 0;
+    for (int i = 0; i < sensor_count; i++) {
+        if (!sensor_is_visible(&sensors[i])) {
+            continue;
+        }
+        if (visible == index) {
+            return &sensors[i];
+        }
+        visible++;
+    }
+    return NULL;
+}
+
 
 // Cleanup task to mark stale sensors as unavailable
 static void sensor_cleanup_task(void *pvParameters) {

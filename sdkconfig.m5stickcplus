@@ -13,3 +13,11 @@ CONFIG_COMPILER_CXX_RTTI=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_m5stickcplus.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_m5stickcplus.csv"
+
+# The base sdkconfig points OTA at the standard build's release asset
+# (weight.bin). The M5StickC Plus release job publishes its binary under a
+# distinct name (weight-m5stickcplus.bin, see .github/workflows/release.yml)
+# so the two variants don't collide on the same release -- override the URL
+# here so M5StickC Plus devices OTA to the matching binary instead of the
+# incompatible standard build.
+CONFIG_OTA_FIRMWARE_UPGRADE_URL="https://github.com/jcodybaker/esp32-sensor-station/releases/latest/download/weight-m5stickcplus.bin"

@@ -6,6 +6,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <driver/uart.h>
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+#include <driver/gpio.h>
+#endif
 
 #include "sensors.h"
 
@@ -99,6 +102,19 @@ void a02yyuw_init(settings_t *settings) {
         uart_driver_delete(A02YYUW_UART_PORT);
         return;
     }
+
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    // On M5StickC/M5StickCPlus boards, M5.begin() (run earlier for the
+    // display) leaves GPIO0 driven as an output-high -- a workaround for
+    // the onboard CH552 USB-serial chip leaking ~4V onto that pin and
+    // hurting WiFi sensitivity. uart_set_pin() only enables the RX pin's
+    // input path (see uart_set_pin() in esp_driver_uart); it doesn't
+    // disable a pre-existing output driver, so if a02yyuw_rx_gpio is
+    // wired to GPIO0 the ESP32 keeps fighting the sensor's own TX signal
+    // on that shared pin. Explicitly dropping back to input-only releases
+    // the output driver regardless of which GPIO is configured here.
+    gpio_set_direction((gpio_num_t)settings->a02yyuw_rx_gpio, GPIO_MODE_INPUT);
+#endif
 
     sensor_id_cm = sensors_register("Distance", "cm", "distance_cm", "a02yyuw", NULL);
 

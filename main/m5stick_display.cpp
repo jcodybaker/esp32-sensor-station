@@ -88,7 +88,7 @@ void draw_small_sensor(const sensor_data_t *sensor, int top) {
 
 void render(int page) {
     auto &d = M5.Display;
-    int count = sensors_get_count();
+    int count = sensors_get_visible_count();
 
     if (count == 0) {
         d.setTextDatum(textdatum_t::top_left);
@@ -100,12 +100,12 @@ void render(int page) {
 
     if (count == 2) {
         int row_h = (d.height() - 10) / 2;
-        draw_small_sensor(sensors_get_by_index(0), 0);
-        draw_small_sensor(sensors_get_by_index(1), row_h);
+        draw_small_sensor(sensors_get_visible_by_index(0), 0);
+        draw_small_sensor(sensors_get_visible_by_index(1), row_h);
         return;
     }
 
-    draw_big_sensor(sensors_get_by_index(page % count));
+    draw_big_sensor(sensors_get_visible_by_index(page % count));
 }
 
 void m5stick_display_task(void *arg) {
@@ -155,7 +155,7 @@ void m5stick_display_task(void *arg) {
             M5.Display.setBrightness(last_brightness);
         }
 
-        int count = sensors_get_count();
+        int count = sensors_get_visible_count();
         if (count > 2) {
             TickType_t now = xTaskGetTickCount();
             if (now - last_page_switch >= pdMS_TO_TICKS(kPageIntervalMs)) {

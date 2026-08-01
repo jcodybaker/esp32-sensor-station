@@ -84,7 +84,9 @@ jobs:
           release/checksums.txt
         body: |
           ## ESP32 Weight Station ${{ steps.version.outputs.version }}
-          
+
+          ## Standard build
+
           ### Build Information
           - **Target:** ESP32
           - **ESP-IDF Version:** v5.5.1
@@ -115,6 +117,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Both jobs upload assets to the same GitHub Release (one per tag) via
+    # softprops/action-gh-release, which creates-or-updates that release by
+    # tag name. Running them in parallel races two independent
+    # create-or-update calls against the same release; serializing avoids
+    # that race, matching how the asset filenames below (weight-m5stickcplus.bin,
+    # etc.) are made distinct from the standard build's to avoid collisions
+    # once both land on the release.
+    needs: build-and-release
 
     steps:
     - name: Checkout repository
@@ -143,14 +153,17 @@ jobs:
     - name: Prepare release artifacts
       run: |
         mkdir -p release
-        cp build/weight.bin release/
-        cp build/bootloader/bootloader.bin release/
-        cp build/partition_table/partition-table.bin release/
-        cp build/flash_project_args release/
-        cp build/flasher_args.json release/
+        # Suffixed so these land in the same GitHub Release as the standard
+        # build's assets (both jobs release to the tag) without overwriting
+        # them -- see the `needs:` note on this job.
+        cp build/weight.bin release/weight-m5stickcplus.bin
+        cp build/bootloader/bootloader.bin release/bootloader-m5stickcplus.bin
+        cp build/partition_table/partition-table.bin release/partition-table-m5stickcplus.bin
+        cp build/flash_project_args release/flash_project_args-m5stickcplus
+        cp build/flasher_args.json release/flasher_args-m5stickcplus.json
 
         # Create a flash instructions file
-        cat > release/FLASH_INSTRUCTIONS.txt << 'EOF'
+        cat > release/FLASH_INSTRUCTIONS-m5stickcplus.txt << 'EOF'
         ESP32 Weight Station Flashing Instructions (M5StickC Plus)
         ============================================================
 
@@ -162,37 +175,40 @@ jobs:
         esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
           --before default_reset --after hard_reset write_flash \
           --flash_mode dio --flash_freq 40m --flash_size detect \
-          0x1000 bootloader.bin \
-          0x8000 partition-table.bin \
-          0x10000 weight.bin
+          0x1000 bootloader-m5stickcplus.bin \
+          0x8000 partition-table-m5stickcplus.bin \
+          0x10000 weight-m5stickcplus.bin
 
         Note: Replace /dev/ttyUSB0 with your actual serial port (e.g., COM3 on Windows)
 
-        Method 2: Using flasher_args.json
-        ----------------------------------
-        The flasher_args.json file contains the complete flashing configuration
-        and can be used with ESP-IDF's flash tools.
+        Method 2: Using flasher_args-m5stickcplus.json
+        -------------------------------------------------
+        The flasher_args-m5stickcplus.json file contains the complete flashing
+        configuration and can be used with ESP-IDF's flash tools.
 
         EOF
 
         # Create checksums
         cd release
-        sha256sum *.bin > checksums.txt
+        sha256sum *.bin > checksums-m5stickcplus.txt
         cd ..
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          release/weight.bin
-          release/bootloader.bin
-          release/partition-table.bin
-          release/flash_project_args
-          release/flasher_args.json
-          release/FLASH_INSTRUCTIONS.txt
-          release/checksums.txt
+          release/weight-m5stickcplus.bin
+          release/bootloader-m5stickcplus.bin
+          release/partition-table-m5stickcplus.bin
+          release/flash_project_args-m5stickcplus
+          release/flasher_args-m5stickcplus.json
+          release/FLASH_INSTRUCTIONS-m5stickcplus.txt
+          release/checksums-m5stickcplus.txt
         body: |
-          ## ESP32 Weight Station ${{ steps.version.outputs.version }} (M5StickC Plus)
+
+          ---
+
+          ## M5StickC Plus variant
 
           ### Build Information
           - **Target:** ESP32 (M5StickC Plus, LCD display enabled)
@@ -200,22 +216,25 @@ jobs:
           - **Build Date:** ${{ github.event.head_commit.timestamp }}
 
           ### Installation
-          Download the artifacts and follow the instructions in `FLASH_INSTRUCTIONS.txt` to flash your M5StickC Plus.
+          Download the artifacts and follow the instructions in `FLASH_INSTRUCTIONS-m5stickcplus.txt` to flash your M5StickC Plus.
 
           ### Files Included
-          - `weight.bin` - Main application binary
-          - `bootloader.bin` - Bootloader binary
-          - `partition-table.bin` - Partition table binary
-          - `flasher_args.json` - Complete flashing configuration
-          - `flash_project_args` - Flash arguments for the project
-          - `FLASH_INSTRUCTIONS.txt` - Detailed flashing instructions
-          - `checksums.txt` - SHA256 checksums for verification
-
-          ### Changes
-          See the commit history for details on what's included in this release.
+          - `weight-m5stickcplus.bin` - Main application binary
+          - `bootloader-m5stickcplus.bin` - Bootloader binary
+          - `partition-table-m5stickcplus.bin` - Partition table binary
+          - `flasher_args-m5stickcplus.json` - Complete flashing configuration
+          - `flash_project_args-m5stickcplus` - Flash arguments for the project
+          - `FLASH_INSTRUCTIONS-m5stickcplus.txt` - Detailed flashing instructions
+          - `checksums-m5stickcplus.txt` - SHA256 checksums for verification
+        # Appends to the release body the standard build's job already wrote,
+        # instead of replacing it -- both jobs update the same release, and
+        # without this the second writer's body would silently clobber the
+        # first's (softprops/action-gh-release replaces body on update by
+        # default). generate_release_notes is intentionally omitted here so
+        # GitHub's auto-generated changelog isn't inserted a second time.
+        append_body: true
         draft: false
         prerelease: false
         fail_on_unmatched_files: true
-        generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
