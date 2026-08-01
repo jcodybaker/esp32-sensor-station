@@ -1,6 +1,7 @@
 extern "C" {
 #include "m5stick_display.h"
 #include "sensors.h"
+#include "wifi.h"
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -27,7 +28,7 @@ constexpr int kRotationHysteresisPolls = 4;
 // whichever of the four rotations puts the "down" edge closest to gravity.
 int rotation_from_accel(float ax, float ay) {
     if (fabsf(ax) > fabsf(ay)) {
-        return ax > 0 ? 3 : 1;
+        return ax > 0 ? 1 : 3;
     }
     return ay > 0 ? 0 : 2;
 }
@@ -40,13 +41,19 @@ void format_sensor_value(const sensor_data_t *sensor, char *buf, size_t buf_len)
     }
 }
 
-void draw_footer(const settings_t *settings) {
+void draw_footer() {
     auto &d = M5.Display;
     d.setTextDatum(textdatum_t::bottom_left);
     d.setTextPadding(d.width());
     d.setTextSize(1);
-    const char *hostname = (settings->hostname && settings->hostname[0]) ? settings->hostname : "unknown";
-    d.drawString(hostname, 2, d.height() - 1);
+    char buf[32];
+    const char *label = "no ip";
+    if (wifi_get_ip_str(buf, sizeof(buf))) {
+        label = buf;
+    } else if (wifi_get_ap_ssid(buf, sizeof(buf))) {
+        label = buf;
+    }
+    d.drawString(label, 2, d.height() - 1);
 }
 
 // Single sensor, large font, filling most of the screen.
@@ -104,17 +111,10 @@ void render(int page) {
 void m5stick_display_task(void *arg) {
     settings_t *settings = static_cast<settings_t *>(arg);
 
-    auto cfg = M5.config();
-    cfg.clear_display = true;
-    cfg.output_power = true;
-    cfg.internal_imu = true;
-    cfg.internal_rtc = false;
-    cfg.internal_spk = false;
-    cfg.internal_mic = false;
-    M5.begin(cfg);
-
-    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-
+    // M5.begin() already ran in m5stick_display_power_init(), called
+    // synchronously from app_main() before any sensor drivers, so the
+    // Grove-port power rail (AXP192 EXTEN, needed by e.g. a Grove-wired
+    // RCWL-9620) is guaranteed on before this task starts.
     bool have_imu = (M5.Imu.getType() != m5::imu_none);
     int current_rotation = 1;
     int candidate_rotation = current_rotation;
@@ -168,13 +168,38 @@ void m5stick_display_task(void *arg) {
         }
 
         render(page);
-        draw_footer(settings);
+        draw_footer();
 
         vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
     }
 }
 
 }  // namespace
+
+extern "C" void m5stick_display_power_init(void) {
+    auto cfg = M5.config();
+    cfg.clear_display = true;
+    cfg.output_power = true;
+    cfg.internal_imu = true;
+    cfg.internal_rtc = false;
+    cfg.internal_spk = false;
+    cfg.internal_mic = false;
+    M5.begin(cfg);
+
+    // M5Unified's AXP192 init only enables EXTEN, LDO2, and LDO3 (for
+    // Ext-power / LCD). The classic M5StickCPlus.h library also enables
+    // DCDC1 in the same combined register write -- M5Unified never touches
+    // it for this board, so it's left wherever the chip's power-on-reset
+    // default leaves it. The Grove port (where a wired sensor like an
+    // RCWL-9620 lives) depends on that rail; without it the port can be
+    // unpowered even though EXTEN is on.
+    if (M5.getBoard() == m5::board_t::board_M5StickC ||
+        M5.getBoard() == m5::board_t::board_M5StickCPlus) {
+        M5.Power.Axp192.setDCDC1(3300);
+    }
+
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
 
 extern "C" void m5stick_display_init(settings_t *settings) {
     BaseType_t ok = xTaskCreatePinnedToCore(

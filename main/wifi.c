@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_mac.h"
+#include "esp_netif.h"
 #include "esp_sntp.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
@@ -252,6 +253,27 @@ int8_t wifi_get_rssi(void) {
         return 0; // Return 0 if not connected or error
     }
     return ap_info.rssi;
+}
+
+bool wifi_get_ip_str(char *buf, size_t buf_len) {
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == NULL) {
+        return false;
+    }
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
+        return false;
+    }
+    snprintf(buf, buf_len, IPSTR, IP2STR(&ip_info.ip));
+    return true;
+}
+
+bool wifi_get_ap_ssid(char *buf, size_t buf_len) {
+    if (!ap_active || ap_ssid[0] == '\0') {
+        return false;
+    }
+    snprintf(buf, buf_len, "%s", ap_ssid);
+    return true;
 }
 
 void wifi_init(settings_t *settings)

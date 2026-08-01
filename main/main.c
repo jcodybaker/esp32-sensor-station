@@ -63,6 +63,10 @@ void app_main(void)
     
     // Only initialize sensors if NOT in OTA mode
     if (!ota_mode) {
+        // Power on the display / Grove-port power rail before any sensor
+        // driver that might depend on it (e.g. a Grove-wired RCWL-9620).
+        m5stick_display_power_init();
+
         sensors_init(settings, http_server);
         init_ds18b20(settings);
         weight_init(settings);
