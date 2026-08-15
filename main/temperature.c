@@ -83,6 +83,16 @@ void init_ds18b20(settings_t *settings) {
         ESP_LOGW(TAG, "DS18B20 GPIO not configured, skipping DS18B20 initialization");
         return;
     }
+
+#if CONFIG_ENABLE_M5STICKC_DISPLAY
+    // M5.begin() (called from m5stick_display_power_init() before any sensor
+    // driver inits) reconfigures GPIO0 for its own use, which leaves it in a
+    // state the 1-Wire RMT driver doesn't reclaim on its own -- unlike
+    // uart_set_pin(), which resets its pins internally. Reclaim it here the
+    // same way we do for the A02YYUW UART RX pin.
+    gpio_reset_pin(settings->ds18b20_gpio);
+#endif
+
     if (settings->ds18b20_pwr_gpio >= 0) {
         // Configure DS18B20 power GPIO and set it high
         gpio_config_t io_conf = {
