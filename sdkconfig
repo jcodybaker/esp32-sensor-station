@@ -486,6 +486,13 @@ CONFIG_EZO_PH_DEFAULT_I2C_ADDR=0x63
 # end of Atlas Scientific EZO pH Sensor Configuration
 
 #
+# Hall-Effect Flow Sensor Configuration
+#
+CONFIG_ENABLE_FLOW_SENSOR=y
+# CONFIG_FLOW_SENSOR_PERSIST_TOTALS is not set
+# end of Hall-Effect Flow Sensor Configuration
+
+#
 # M5StickC Plus Display Configuration
 #
 # CONFIG_ENABLE_M5STICKC_DISPLAY is not set

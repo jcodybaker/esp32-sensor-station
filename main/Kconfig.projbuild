@@ -221,6 +221,29 @@ menu "Atlas Scientific EZO pH Sensor Configuration"
             Factory-default I2C address of the Atlas Scientific EZO pH circuit.
 endmenu
 
+menu "Hall-Effect Flow Sensor Configuration"
+
+    config ENABLE_FLOW_SENSOR
+        bool "Enable hall-effect flow sensor support"
+        default y
+        help
+            Enables support for up to 5 hall-effect flow sensors (e.g. YF-S201), each
+            wired to its own pulled-up GPIO data pin that is pulled to ground on each
+            tick. Disable to exclude this driver entirely from the build. Sensors are
+            also disabled at runtime by default until their GPIO pins are configured
+            in Settings.
+
+    config FLOW_SENSOR_PERSIST_TOTALS
+        bool "Persist flow sensor running totals to NVS"
+        default n
+        depends on ENABLE_FLOW_SENSOR
+        help
+            When enabled, each flow sensor's running total (in liters) is periodically
+            written to NVS so it survives a reboot. Disabled by default to avoid
+            wearing flash on devices with frequent pulses; when disabled, every
+            sensor's running total resets to zero on each boot.
+endmenu
+
 menu "M5StickC Plus Display Configuration"
 
     config ENABLE_M5STICKC_DISPLAY

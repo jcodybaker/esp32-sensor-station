@@ -21,3 +21,9 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_m5stickcplus.csv"
 # here so M5StickC Plus devices OTA to the matching binary instead of the
 # incompatible standard build.
 CONFIG_OTA_FIRMWARE_UPGRADE_URL="https://github.com/jcodybaker/esp32-sensor-station/releases/latest/download/weight-m5stickcplus.bin"
+
+# Hall-effect flow sensor support is listed explicitly here (matching the
+# Kconfig defaults) so this variant's supported sensors stay documented even
+# if the base sdkconfig/Kconfig defaults change later.
+CONFIG_ENABLE_FLOW_SENSOR=y
+# CONFIG_FLOW_SENSOR_PERSIST_TOTALS is not set

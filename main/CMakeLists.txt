@@ -5,7 +5,7 @@ if(CONFIG_ENABLE_M5STICKC_DISPLAY)
     set(m5stick_display_requires "m5gfx" "m5unified")
 endif()
 
-idf_component_register(SRCS "mqtt_publisher.c" "pump.c" "temperature.c" "sensors.c" "bthome_observer.c" "settings.c" "http_server.c" "ota.c" "wifi.c" "weight.c" "main.c" "metrics.c" "pump.c" "syslog.c" "rcwl9620.c" "a02yyuw.c" "ezo_ph.c" "${m5stick_display_srcs}"
+idf_component_register(SRCS "mqtt_publisher.c" "pump.c" "temperature.c" "sensors.c" "bthome_observer.c" "settings.c" "http_server.c" "ota.c" "wifi.c" "weight.c" "main.c" "metrics.c" "pump.c" "syslog.c" "rcwl9620.c" "a02yyuw.c" "ezo_ph.c" "flow_sensor.c" "${m5stick_display_srcs}"
                     INCLUDE_DIRS "."
                     PRIV_REQUIRES bt esp_http_client app_update esp_https_ota
                                   esp_netif mbedtls nvs_flash esp_wifi esp_psram

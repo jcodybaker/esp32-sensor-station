@@ -25,6 +25,7 @@
 #include "syslog.h"
 #include "rcwl9620.h"
 #include "a02yyuw.h"
+#include "flow_sensor.h"
 #include "m5stick_display.h"
 
 bool g_ntp_initialized = false;
@@ -75,6 +76,7 @@ void app_main(void)
         ezo_ph_init(settings, http_server);
         rcwl9620_init(settings);
         a02yyuw_init(settings);
+        flow_sensor_init(settings);
         m5stick_display_init(settings);
     }
     

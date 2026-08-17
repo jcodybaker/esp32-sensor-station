@@ -17,6 +17,7 @@
 #include "IQmathLib.h"
 #include "bthome.h"
 #include "temperature.h"
+#include "flow_sensor.h"
 #include "pump.h"
 #include "ezo_ph.h"
 #include "metrics.h"
@@ -578,6 +579,43 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->a02yyuw_rx_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
 
+    // Send flow sensor configuration
+    snprintf(buffer, 1024,
+        "<hr class='minor'/>\n"
+        "<h2>Hall-Effect Flow Sensor Configuration</h2>\n"
+        "<label for='flow_use_gallons'>\n"
+        "<input type='checkbox' id='flow_use_gallons' name='flow_use_gallons' value='1'%s> Display Flow Totals in Gallons\n"
+        "</label>\n",
+        settings->flow_use_gallons ? " checked" : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
+        float total_display = settings->flow_sensor_total_liters[i];
+        const char *total_unit = "L";
+        if (settings->flow_use_gallons) {
+            total_display *= FLOW_LITERS_TO_US_GALLONS;
+            total_unit = "gal";
+        }
+        char *encoded_flow_name = url_encode(settings->flow_sensor_name[i]);
+        snprintf(buffer, 1024,
+            "<div style='margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;'>\n"
+            "<strong>Flow Sensor %d</strong> (current total: %.3f %s)<br>\n"
+            "<label for='flow_name%d'>Name (optional):</label>\n"
+            "<input type='text' id='flow_name%d' name='flow_name%d' value='%s' maxlength='%d'>\n"
+            "<label for='flow_gpio%d'>Data GPIO Pin (-1 = disabled):</label>\n"
+            "<input type='number' id='flow_gpio%d' name='flow_gpio%d' value='%d' min='-1' max='39'>\n"
+            "<label for='flow_lpp%d'>Liters per Pulse:</label>\n"
+            "<input type='number' id='flow_lpp%d' name='flow_lpp%d' value='%.6f' step='0.000001' min='0'>\n"
+            "</div>\n",
+            i + 1, total_display, total_unit,
+            i, i, i, encoded_flow_name ? encoded_flow_name : "", FLOW_SENSOR_NAME_MAX_LEN,
+            i, i, i, settings->flow_sensor_gpio[i],
+            i, i, i, settings->flow_sensor_liters_per_pulse[i]);
+        httpd_resp_sendstr_chunk(req, buffer);
+        free(encoded_flow_name);
+        atomic_fetch_add(&free_count_settings, 1);
+    }
+
     // Send BTHome object IDs multi-select
     httpd_resp_sendstr_chunk(req,
         "<hr class='minor'/>\n"
@@ -730,7 +768,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "  });\n"
         "  params.append('ds18b20_name_count', ds18b20NameCount);\n"
         "  // Fields that should be sent even when empty (to allow clearing)\n"
-        "  var allowEmptyFields = ['syslog_server', 'mqtt_broker_url', 'mqtt_username', 'mqtt_password'];\n"
+        "  var allowEmptyFields = ['syslog_server', 'mqtt_broker_url', 'mqtt_username', 'mqtt_password', 'flow_name0', 'flow_name1', 'flow_name2', 'flow_name3', 'flow_name4'];\n"
         "  // Process all other form fields\n"
         "  for (var pair of formData.entries()) {\n"
         "    if (pair[1]) {\n"
@@ -1202,6 +1240,88 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
                 ESP_LOGE(TAG, "Failed to write a02yyuw_rx_gpio to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
+        }
+    }
+
+    // Check and update flow sensor GPIO pins and liters-per-pulse values
+    for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
+        char field_name[16];
+
+        snprintf(field_name, sizeof(field_name), "flow_gpio%d", i);
+        if (httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK) {
+            int8_t flow_gpio = (int8_t)atoi(param_buf);
+            if (flow_gpio == settings->flow_sensor_gpio[i]) {
+                ESP_LOGI(TAG, "Flow sensor %d GPIO unchanged", i);
+                param_buf[0] = '\0'; // Clear to avoid updating
+            }
+            if (strlen(param_buf) > 0) {
+                err = nvs_set_i8(settings_handle, field_name, flow_gpio);
+                if (err == ESP_OK) {
+                    settings->flow_sensor_gpio[i] = flow_gpio;
+                    updated = true;
+                    ESP_LOGI(TAG, "Updated flow sensor %d GPIO to %d", i, flow_gpio);
+                } else {
+                    ESP_LOGE(TAG, "Failed to write %s to NVS: %s", field_name, esp_err_to_name(err));
+                }
+                restart_needed = true;
+            }
+        }
+
+        snprintf(field_name, sizeof(field_name), "flow_lpp%d", i);
+        if (httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK) {
+            float flow_lpp = atof(param_buf);
+            if (flow_lpp == settings->flow_sensor_liters_per_pulse[i]) {
+                ESP_LOGI(TAG, "Flow sensor %d liters-per-pulse unchanged", i);
+                param_buf[0] = '\0'; // Clear to avoid updating
+            }
+            if (strlen(param_buf) > 0) {
+                err = nvs_set_blob(settings_handle, field_name, &flow_lpp, sizeof(flow_lpp));
+                if (err == ESP_OK) {
+                    settings->flow_sensor_liters_per_pulse[i] = flow_lpp;
+                    updated = true;
+                    ESP_LOGI(TAG, "Updated flow sensor %d liters-per-pulse to %.6f", i, flow_lpp);
+                } else {
+                    ESP_LOGE(TAG, "Failed to write %s to NVS: %s", field_name, esp_err_to_name(err));
+                }
+            }
+        }
+
+        snprintf(field_name, sizeof(field_name), "flow_name%d", i);
+        if (httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK) {
+            url_decode(decoded_param, param_buf);  // Decode URL encoding
+            if (strlen(decoded_param) > FLOW_SENSOR_NAME_MAX_LEN) {
+                decoded_param[FLOW_SENSOR_NAME_MAX_LEN] = '\0';  // Truncate to the field limit
+            }
+            if (strcmp(decoded_param, settings->flow_sensor_name[i]) == 0) {
+                ESP_LOGI(TAG, "Flow sensor %d name unchanged", i);
+            } else {
+                err = nvs_set_str(settings_handle, field_name, decoded_param);
+                if (err == ESP_OK) {
+                    strncpy(settings->flow_sensor_name[i], decoded_param, FLOW_SENSOR_NAME_MAX_LEN);
+                    settings->flow_sensor_name[i][FLOW_SENSOR_NAME_MAX_LEN] = '\0';
+                    updated = true;
+                    ESP_LOGI(TAG, "Updated flow sensor %d name to '%s'", i, settings->flow_sensor_name[i]);
+                    restart_needed = true;
+                } else {
+                    ESP_LOGE(TAG, "Failed to write %s to NVS: %s", field_name, esp_err_to_name(err));
+                }
+            }
+        }
+    }
+
+    // Check and update flow_use_gallons
+    bool flow_use_gallons = false;
+    if (httpd_query_key_value(query_buf, "flow_use_gallons", param_buf, sizeof(param_buf)) == ESP_OK) {
+        flow_use_gallons = true;
+    }
+    if (flow_use_gallons != settings->flow_use_gallons) {
+        err = nvs_set_u8(settings_handle, "flow_gal", flow_use_gallons ? 1 : 0);
+        if (err == ESP_OK) {
+            settings->flow_use_gallons = flow_use_gallons;
+            updated = true;
+            ESP_LOGI(TAG, "Updated flow_use_gallons to %d", flow_use_gallons);
+        } else {
+            ESP_LOGE(TAG, "Failed to write flow_use_gallons to NVS: %s", esp_err_to_name(err));
         }
     }
 
@@ -2046,6 +2166,13 @@ esp_err_t settings_init(settings_t *settings)
     settings->rcwl9620_trigger_gpio = -1;
     settings->rcwl9620_echo_gpio = -1;
     settings->a02yyuw_rx_gpio = -1;
+    for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
+        settings->flow_sensor_gpio[i] = -1;
+        settings->flow_sensor_liters_per_pulse[i] = 0.0f;
+        settings->flow_sensor_total_liters[i] = 0.0f;
+        settings->flow_sensor_name[i][0] = '\0';
+    }
+    settings->flow_use_gallons = false;
     settings->syslog_server = NULL;
     settings->syslog_port = 514;  // Default syslog port
     settings->mqtt_broker_url = NULL;
@@ -2542,6 +2669,97 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
+    ESP_LOGI(TAG, "Reading flow sensor configuration from NVS...");
+    for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
+        char key[16];
+
+        snprintf(key, sizeof(key), "flow_gpio%d", i);
+        int8_t flow_gpio_value;
+        err = nvs_get_i8(settings_handle, key, &flow_gpio_value);
+        switch (err) {
+            case ESP_OK:
+                settings->flow_sensor_gpio[i] = flow_gpio_value;
+                ESP_LOGI(TAG, "Read '%s' = %d", key, settings->flow_sensor_gpio[i]);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                settings->flow_sensor_gpio[i] = -1;  // Disabled by default
+                break;
+            default:
+                ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
+                return err;
+        }
+
+        snprintf(key, sizeof(key), "flow_lpp%d", i);
+        float flow_lpp_value;
+        size_t flow_lpp_size = sizeof(flow_lpp_value);
+        err = nvs_get_blob(settings_handle, key, &flow_lpp_value, &flow_lpp_size);
+        switch (err) {
+            case ESP_OK:
+                settings->flow_sensor_liters_per_pulse[i] = flow_lpp_value;
+                ESP_LOGI(TAG, "Read '%s' = %.6f", key, settings->flow_sensor_liters_per_pulse[i]);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                settings->flow_sensor_liters_per_pulse[i] = 0.0f;
+                break;
+            default:
+                ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
+                return err;
+        }
+
+#if CONFIG_FLOW_SENSOR_PERSIST_TOTALS
+        snprintf(key, sizeof(key), "flow_tot%d", i);
+        float flow_tot_value;
+        size_t flow_tot_size = sizeof(flow_tot_value);
+        err = nvs_get_blob(settings_handle, key, &flow_tot_value, &flow_tot_size);
+        switch (err) {
+            case ESP_OK:
+                settings->flow_sensor_total_liters[i] = flow_tot_value;
+                ESP_LOGI(TAG, "Read '%s' = %.6f", key, settings->flow_sensor_total_liters[i]);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                settings->flow_sensor_total_liters[i] = 0.0f;
+                break;
+            default:
+                ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
+                return err;
+        }
+#else
+        settings->flow_sensor_total_liters[i] = 0.0f;
+#endif
+
+        snprintf(key, sizeof(key), "flow_name%d", i);
+        size_t flow_name_size = sizeof(settings->flow_sensor_name[i]);
+        err = nvs_get_str(settings_handle, key, settings->flow_sensor_name[i], &flow_name_size);
+        switch (err) {
+            case ESP_OK:
+                ESP_LOGI(TAG, "Read '%s' = '%s'", key, settings->flow_sensor_name[i]);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                settings->flow_sensor_name[i][0] = '\0';
+                break;
+            default:
+                ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
+                return err;
+        }
+    }
+
+    ESP_LOGI(TAG, "Reading 'flow_use_gallons' from NVS...");
+    uint8_t flow_use_gallons_value;
+    err = nvs_get_u8(settings_handle, "flow_gal", &flow_use_gallons_value);
+    switch (err) {
+        case ESP_OK:
+            settings->flow_use_gallons = flow_use_gallons_value != 0;
+            ESP_LOGI(TAG, "Read 'flow_use_gallons' = %d", settings->flow_use_gallons);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->flow_use_gallons = false;  // Default to liters
+            ESP_LOGI(TAG, "No value for 'flow_use_gallons'; using default = %d (liters)", settings->flow_use_gallons);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading flow_use_gallons!", esp_err_to_name(err));
+            return err;
+    }
+
     ESP_LOGI(TAG, "Reading 'pump_dispense_ml' from NVS...");
     int16_t pump_dispense_ml_value;
     err = nvs_get_i16(settings_handle, "pump_disp_ml", &pump_dispense_ml_value);
@@ -2889,13 +3107,45 @@ const char* settings_get_ds18b20_name(settings_t *settings, uint64_t address) {
     if (settings == NULL || settings->ds18b20_names == NULL) {
         return NULL;
     }
-    
+
     for (size_t i = 0; i < settings->ds18b20_names_count; i++) {
         if (settings->ds18b20_names[i].address == address) {
             return settings->ds18b20_names[i].name;
         }
     }
-    
+
     return NULL;
+}
+
+esp_err_t settings_save_flow_total(settings_t *settings, int index, float total_liters) {
+    if (settings == NULL || index < 0 || index >= FLOW_SENSOR_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+#if !CONFIG_FLOW_SENSOR_PERSIST_TOTALS
+    (void)total_liters;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    nvs_handle_t settings_handle;
+    esp_err_t err = nvs_open("settings", NVS_READWRITE, &settings_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle to save flow total!", esp_err_to_name(err));
+        return err;
+    }
+
+    char key[16];
+    snprintf(key, sizeof(key), "flow_tot%d", index);
+    err = nvs_set_blob(settings_handle, key, &total_liters, sizeof(total_liters));
+    if (err == ESP_OK) {
+        err = nvs_commit(settings_handle);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save %s to NVS: %s", key, esp_err_to_name(err));
+    } else {
+        settings->flow_sensor_total_liters[index] = total_liters;
+    }
+    nvs_close(settings_handle);
+    return err;
+#endif // CONFIG_FLOW_SENSOR_PERSIST_TOTALS
 }
 
