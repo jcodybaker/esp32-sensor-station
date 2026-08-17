@@ -590,7 +590,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, buffer);
 
     for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
-        float total_display = settings->flow_sensor_total_liters[i];
+        double total_display = settings->flow_sensor_total_liters[i];
         const char *total_unit = "L";
         if (settings->flow_use_gallons) {
             total_display *= FLOW_LITERS_TO_US_GALLONS;
@@ -1269,7 +1269,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
 
         snprintf(field_name, sizeof(field_name), "flow_lpp%d", i);
         if (httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK) {
-            float flow_lpp = atof(param_buf);
+            double flow_lpp = atof(param_buf);
             if (flow_lpp == settings->flow_sensor_liters_per_pulse[i]) {
                 ESP_LOGI(TAG, "Flow sensor %d liters-per-pulse unchanged", i);
                 param_buf[0] = '\0'; // Clear to avoid updating
@@ -2168,8 +2168,8 @@ esp_err_t settings_init(settings_t *settings)
     settings->a02yyuw_rx_gpio = -1;
     for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
         settings->flow_sensor_gpio[i] = -1;
-        settings->flow_sensor_liters_per_pulse[i] = 0.0f;
-        settings->flow_sensor_total_liters[i] = 0.0f;
+        settings->flow_sensor_liters_per_pulse[i] = 0.0;
+        settings->flow_sensor_total_liters[i] = 0.0;
         settings->flow_sensor_name[i][0] = '\0';
     }
     settings->flow_use_gallons = false;
@@ -2690,16 +2690,33 @@ esp_err_t settings_init(settings_t *settings)
         }
 
         snprintf(key, sizeof(key), "flow_lpp%d", i);
-        float flow_lpp_value;
-        size_t flow_lpp_size = sizeof(flow_lpp_value);
-        err = nvs_get_blob(settings_handle, key, &flow_lpp_value, &flow_lpp_size);
-        switch (err) {
-            case ESP_OK:
+        size_t flow_lpp_size = 0;
+        err = nvs_get_blob(settings_handle, key, NULL, &flow_lpp_size);
+        if (err == ESP_OK && flow_lpp_size == sizeof(float)) {
+            // Blob was written by older firmware that stored this value as a
+            // float; read it back at its original size and upconvert rather
+            // than letting a size-mismatched read leave garbage bytes.
+            float legacy_value;
+            size_t legacy_size = sizeof(legacy_value);
+            err = nvs_get_blob(settings_handle, key, &legacy_value, &legacy_size);
+            if (err == ESP_OK) {
+                settings->flow_sensor_liters_per_pulse[i] = (double)legacy_value;
+                ESP_LOGI(TAG, "Read legacy '%s' = %.6f", key, settings->flow_sensor_liters_per_pulse[i]);
+            }
+        } else if (err == ESP_OK) {
+            double flow_lpp_value;
+            flow_lpp_size = sizeof(flow_lpp_value);
+            err = nvs_get_blob(settings_handle, key, &flow_lpp_value, &flow_lpp_size);
+            if (err == ESP_OK) {
                 settings->flow_sensor_liters_per_pulse[i] = flow_lpp_value;
                 ESP_LOGI(TAG, "Read '%s' = %.6f", key, settings->flow_sensor_liters_per_pulse[i]);
+            }
+        }
+        switch (err) {
+            case ESP_OK:
                 break;
             case ESP_ERR_NVS_NOT_FOUND:
-                settings->flow_sensor_liters_per_pulse[i] = 0.0f;
+                settings->flow_sensor_liters_per_pulse[i] = 0.0;
                 break;
             default:
                 ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
@@ -2708,23 +2725,40 @@ esp_err_t settings_init(settings_t *settings)
 
 #if CONFIG_FLOW_SENSOR_PERSIST_TOTALS
         snprintf(key, sizeof(key), "flow_tot%d", i);
-        float flow_tot_value;
-        size_t flow_tot_size = sizeof(flow_tot_value);
-        err = nvs_get_blob(settings_handle, key, &flow_tot_value, &flow_tot_size);
-        switch (err) {
-            case ESP_OK:
+        size_t flow_tot_size = 0;
+        err = nvs_get_blob(settings_handle, key, NULL, &flow_tot_size);
+        if (err == ESP_OK && flow_tot_size == sizeof(float)) {
+            // Blob was written by older firmware that stored this value as a
+            // float; read it back at its original size and upconvert rather
+            // than letting a size-mismatched read leave garbage bytes.
+            float legacy_value;
+            size_t legacy_size = sizeof(legacy_value);
+            err = nvs_get_blob(settings_handle, key, &legacy_value, &legacy_size);
+            if (err == ESP_OK) {
+                settings->flow_sensor_total_liters[i] = (double)legacy_value;
+                ESP_LOGI(TAG, "Read legacy '%s' = %.6f", key, settings->flow_sensor_total_liters[i]);
+            }
+        } else if (err == ESP_OK) {
+            double flow_tot_value;
+            flow_tot_size = sizeof(flow_tot_value);
+            err = nvs_get_blob(settings_handle, key, &flow_tot_value, &flow_tot_size);
+            if (err == ESP_OK) {
                 settings->flow_sensor_total_liters[i] = flow_tot_value;
                 ESP_LOGI(TAG, "Read '%s' = %.6f", key, settings->flow_sensor_total_liters[i]);
+            }
+        }
+        switch (err) {
+            case ESP_OK:
                 break;
             case ESP_ERR_NVS_NOT_FOUND:
-                settings->flow_sensor_total_liters[i] = 0.0f;
+                settings->flow_sensor_total_liters[i] = 0.0;
                 break;
             default:
                 ESP_LOGE(TAG, "Error (%s) reading %s!", esp_err_to_name(err), key);
                 return err;
         }
 #else
-        settings->flow_sensor_total_liters[i] = 0.0f;
+        settings->flow_sensor_total_liters[i] = 0.0;
 #endif
 
         snprintf(key, sizeof(key), "flow_name%d", i);
@@ -3117,7 +3151,7 @@ const char* settings_get_ds18b20_name(settings_t *settings, uint64_t address) {
     return NULL;
 }
 
-esp_err_t settings_save_flow_total(settings_t *settings, int index, float total_liters) {
+esp_err_t settings_save_flow_total(settings_t *settings, int index, double total_liters) {
     if (settings == NULL || index < 0 || index >= FLOW_SENSOR_COUNT) {
         return ESP_ERR_INVALID_ARG;
     }

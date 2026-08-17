@@ -57,8 +57,8 @@ static void IRAM_ATTR flow_sensor_isr_handler(void *arg) {
 
 static void flow_sensor_task(void *pvParameters) {
     settings_t *settings = (settings_t *)pvParameters;
-    float totals[FLOW_SENSOR_COUNT];
-    float increments[FLOW_SENSOR_COUNT] = {0};
+    double totals[FLOW_SENSOR_COUNT];
+    double increments[FLOW_SENSOR_COUNT] = {0};
 #if CONFIG_FLOW_SENSOR_PERSIST_TOTALS
     bool dirty[FLOW_SENSOR_COUNT] = {0};
     TickType_t last_persist = xTaskGetTickCount();
@@ -79,14 +79,14 @@ static void flow_sensor_task(void *pvParameters) {
 
             uint32_t count = atomic_exchange(&s_pulse_counts[i], 0);
             if (count > 0) {
-                float added = (float)count * settings->flow_sensor_liters_per_pulse[i];
+                double added = (double)count * settings->flow_sensor_liters_per_pulse[i];
                 totals[i] += added;
                 increments[i] += added;
 #if CONFIG_FLOW_SENSOR_PERSIST_TOTALS
                 dirty[i] = true;
 #endif
             } else if (now - s_last_pulse_us[i] >= FLOW_SENSOR_IDLE_RESET_US) {
-                increments[i] = 0.0f;
+                increments[i] = 0.0;
             }
 
             // Keep settings in sync so the Settings page shows a live total
@@ -94,7 +94,7 @@ static void flow_sensor_task(void *pvParameters) {
             // is disabled.
             settings->flow_sensor_total_liters[i] = totals[i];
 
-            float display_multiplier = settings->flow_use_gallons ? FLOW_LITERS_TO_US_GALLONS : 1.0f;
+            double display_multiplier = settings->flow_use_gallons ? FLOW_LITERS_TO_US_GALLONS : 1.0;
             sensors_update(s_sensor_id_liters[i], totals[i], true);
             if (s_sensor_id_display[i] >= 0) {
                 sensors_update(s_sensor_id_display[i], totals[i] * display_multiplier, true);

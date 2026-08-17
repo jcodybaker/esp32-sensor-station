@@ -17,7 +17,7 @@ static const char *TAG = "hx711";
 
 // Global variable to store the latest weight reading
 static int32_t g_latest_weight_raw = 0;
-static float g_latest_weight_grams = 0;
+static double g_latest_weight_grams = 0;
 static bool g_weight_available = false;
 
 // Sensor IDs for registered weight sensors
@@ -106,9 +106,9 @@ static void weight(void *pvParameters)
 
         // Store the latest weight reading
         g_latest_weight_raw = data;
-        // Convert raw int32_t to float, multiply by scale (float), subtract tare
-        float data_float = (float)(g_latest_weight_raw - settings->weight_tare);
-        g_latest_weight_grams = data_float * _IQ16toF(settings->weight_scale);
+        // Convert raw int32_t to double, multiply by scale (float, from IQmath), subtract tare
+        double data_double = (double)(g_latest_weight_raw - settings->weight_tare);
+        g_latest_weight_grams = data_double * _IQ16toF(settings->weight_scale);
         g_weight_available = true;
         
         // Update sensor values if registered
@@ -122,7 +122,7 @@ static void weight(void *pvParameters)
             sensors_update(sensor_id_raw, g_latest_weight_raw, true);
         }
         if (sensor_id_lbs >= 0) {
-            float lbs = g_latest_weight_grams / 453.59237f;
+            double lbs = g_latest_weight_grams / 453.59237;
             sensors_update(sensor_id_lbs, lbs, true);
         }
 
@@ -130,7 +130,7 @@ static void weight(void *pvParameters)
     }
 }
 
-float weight_get_latest(bool *available) {
+double weight_get_latest(bool *available) {
     if (available) {
         *available = g_weight_available;
     }

@@ -22,7 +22,7 @@ typedef struct {
     char metric_name[SENSOR_DISPLAY_NAME_MAX_LEN];  // Prometheus metric name
     char device_name[SENSOR_DEVICE_NAME_MAX_LEN]; // Device label for Prometheus
     char device_id[SENSOR_DEVICE_ID_MAX_LEN];    // Device ID for Prometheus
-    float value;
+    double value;
     time_t last_updated;
     bool available;
     char link_url[64];      // Optional action link URL
@@ -62,7 +62,7 @@ int sensors_register(
  * @param available Whether the sensor data is available/valid
  * @return true if update was successful, false otherwise
  */
-bool sensors_update(int sensor_id, float value, bool available);
+bool sensors_update(int sensor_id, double value, bool available);
 
 /**
  * @brief Update a sensor's value with optional link
@@ -74,7 +74,7 @@ bool sensors_update(int sensor_id, float value, bool available);
  * @param link_text Optional action link text (can be NULL)
  * @return true if update was successful, false otherwise
  */
-bool sensors_update_with_link(int sensor_id, float value, bool available, 
+bool sensors_update_with_link(int sensor_id, double value, bool available,
                                const char *link_url, const char *link_text);
 
 /**
@@ -82,9 +82,9 @@ bool sensors_update_with_link(int sensor_id, float value, bool available,
  * 
  * @param sensor_id Sensor ID returned from sensors_register
  * @param available Pointer to bool that will be set to sensor availability (can be NULL)
- * @return float Current sensor value
+ * @return double Current sensor value
  */
-float sensors_get_value(int sensor_id, bool *available);
+double sensors_get_value(int sensor_id, bool *available);
 
 /**
  * @brief Get the number of registered sensors

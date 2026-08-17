@@ -103,8 +103,8 @@ static void ezo_ph_monitor_task(void *arg) {
     while (1) {
         const char *response = ezo_ph_send_cmd(ph_ctx, "R");
         if (response != NULL && response[0] != '\0') {
-            float ph = 0.0f;
-            if (sscanf(response, "%f", &ph) == 1) {
+            double ph = 0.0;
+            if (sscanf(response, "%lf", &ph) == 1) {
                 sensors_update_with_link(ph_ctx->ph_sensor_id, ph, true, "/ezo_ph/calibrate", "Calibrate");
                 ESP_LOGD(TAG, "pH: %.2f", ph);
             } else {
@@ -147,9 +147,9 @@ static esp_err_t ezo_ph_calibrate_start_handler(httpd_req_t *req) {
     int cal_status = ezo_ph_parse_cal_status(cal_response);
 
     const char *reading_response = ezo_ph_send_cmd(ph_ctx, "R");
-    float reading = 0.0f;
+    double reading = 0.0;
     bool have_reading = (reading_response != NULL && reading_response[0] != '\0' &&
-                          sscanf(reading_response, "%f", &reading) == 1);
+                          sscanf(reading_response, "%lf", &reading) == 1);
 
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "text/html");
@@ -333,8 +333,8 @@ static esp_err_t ezo_ph_calibrate_submit_handler(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    float actual_ph = atof(value_str);
-    if (actual_ph < 0.0f || actual_ph > 14.0f) {
+    double actual_ph = atof(value_str);
+    if (actual_ph < 0.0 || actual_ph > 14.0) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "Invalid pH value (must be between 0 and 14)", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;

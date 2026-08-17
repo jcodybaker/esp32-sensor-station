@@ -341,7 +341,7 @@ int sensors_register(
         sensors[id].metric_name[0] = '\0';
     }
     
-    sensors[id].value = 0.0f;
+    sensors[id].value = 0.0;
     sensors[id].last_updated = 0;
     sensors[id].available = false;
     sensors[id].link_url[0] = '\0';
@@ -355,11 +355,11 @@ int sensors_register(
     return id;
 }
 
-bool sensors_update(int sensor_id, float value, bool available) {
+bool sensors_update(int sensor_id, double value, bool available) {
     return sensors_update_with_link(sensor_id, value, available, NULL, NULL);
 }
 
-bool sensors_update_with_link(int sensor_id, float value, bool available, const char *link_url, const char *link_text) {
+bool sensors_update_with_link(int sensor_id, double value, bool available, const char *link_url, const char *link_text) {
     if (sensors_mutex != NULL) {
         xSemaphoreTake(sensors_mutex, portMAX_DELAY);
     }
@@ -401,7 +401,7 @@ bool sensors_update_with_link(int sensor_id, float value, bool available, const 
     return true;
 }
 
-float sensors_get_value(int sensor_id, bool *available) {
+double sensors_get_value(int sensor_id, bool *available) {
     if (sensors_mutex != NULL) {
         xSemaphoreTake(sensors_mutex, portMAX_DELAY);
     }
@@ -414,14 +414,14 @@ float sensors_get_value(int sensor_id, bool *available) {
         if (sensors_mutex != NULL) {
             xSemaphoreGive(sensors_mutex);
         }
-        return 0.0f;
+        return 0.0;
     }
-    
+
     if (available) {
         *available = sensors[sensor_id].available;
     }
-    
-    float value = sensors[sensor_id].value;
+
+    double value = sensors[sensor_id].value;
     
     if (sensors_mutex != NULL) {
         xSemaphoreGive(sensors_mutex);

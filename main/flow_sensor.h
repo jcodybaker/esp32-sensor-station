@@ -5,7 +5,7 @@
 
 // US liquid gallon, used to convert the canonical liters total for display
 // when settings->flow_use_gallons is set.
-#define FLOW_LITERS_TO_US_GALLONS 0.264172052f
+#define FLOW_LITERS_TO_US_GALLONS 0.264172052
 
 void flow_sensor_init(settings_t *settings);
 

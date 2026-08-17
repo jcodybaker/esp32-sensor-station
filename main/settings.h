@@ -55,8 +55,8 @@ typedef struct {
     int8_t rcwl9620_echo_gpio;          // RCWL-9620 ultrasonic sensor echo GPIO pin (-1 = disabled)
     int8_t a02yyuw_rx_gpio;             // A02YYUW ultrasonic sensor UART RX GPIO pin (-1 = disabled)
     int8_t flow_sensor_gpio[FLOW_SENSOR_COUNT];            // Hall-effect flow sensor data GPIO pins (-1 = disabled)
-    float flow_sensor_liters_per_pulse[FLOW_SENSOR_COUNT]; // Liters added to the running total per pulse
-    float flow_sensor_total_liters[FLOW_SENSOR_COUNT];     // Running total, in liters (persisted only if CONFIG_FLOW_SENSOR_PERSIST_TOTALS)
+    double flow_sensor_liters_per_pulse[FLOW_SENSOR_COUNT]; // Liters added to the running total per pulse
+    double flow_sensor_total_liters[FLOW_SENSOR_COUNT];    // Running total, in liters (persisted only if CONFIG_FLOW_SENSOR_PERSIST_TOTALS)
     char flow_sensor_name[FLOW_SENSOR_COUNT][FLOW_SENSOR_NAME_MAX_LEN + 1]; // User-assigned names (empty = "Flow N")
     bool flow_use_gallons;             // Display flow totals in gallons (true) or liters (false)
     bool temp_use_fahrenheit;          // Display temperatures in Fahrenheit (true) or Celsius (false)
@@ -85,6 +85,6 @@ const char* settings_get_ds18b20_name(settings_t *settings, uint64_t address);
  * @param total_liters New running total, in liters
  * @return esp_err_t ESP_OK on success
  */
-esp_err_t settings_save_flow_total(settings_t *settings, int index, float total_liters);
+esp_err_t settings_save_flow_total(settings_t *settings, int index, double total_liters);
 
 #endif // SETTINGS_H

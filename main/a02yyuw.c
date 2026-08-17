@@ -62,7 +62,7 @@ static void a02yyuw_task(void *pvParameters) {
             continue;
         }
 
-        float distance_cm = distance_mm / 10.0f;
+        double distance_cm = distance_mm / 10.0;
         ESP_LOGD(TAG, "Distance: %.1f cm", distance_cm);
         sensors_update(sensor_id_cm, distance_cm, true);
     }

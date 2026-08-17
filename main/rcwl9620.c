@@ -27,7 +27,7 @@ static const char *TAG = "rcwl9620";
 // Same speed-of-sound constant the working Arduino reference (M5Unit-Sonic's
 // SONIC_IO::getDistance()) uses: mm = duration_us * 0.34 / 2. In cm, that's
 // duration_us * 0.017.
-#define RCWL9620_CM_PER_US 0.017f
+#define RCWL9620_CM_PER_US 0.017
 
 static gpio_num_t trigger_pin;
 static gpio_num_t echo_pin;
@@ -39,7 +39,7 @@ typedef enum {
     RCWL9620_ERR_ECHO_TIMEOUT,
 } rcwl9620_err_t;
 
-static rcwl9620_err_t rcwl9620_measure_cm(uint32_t max_distance_cm, float *distance_cm) {
+static rcwl9620_err_t rcwl9620_measure_cm(uint32_t max_distance_cm, double *distance_cm) {
     gpio_set_level(trigger_pin, 0);
     esp_rom_delay_us(RCWL9620_TRIGGER_LOW_DELAY_US);
     gpio_set_level(trigger_pin, 1);
@@ -63,13 +63,13 @@ static rcwl9620_err_t rcwl9620_measure_cm(uint32_t max_distance_cm, float *dista
         }
     }
 
-    *distance_cm = (float)(echo_end - echo_start) * RCWL9620_CM_PER_US;
+    *distance_cm = (double)(echo_end - echo_start) * RCWL9620_CM_PER_US;
     return RCWL9620_OK;
 }
 
 static void rcwl9620_task(void *pvParameters) {
     while (1) {
-        float distance_cm;
+        double distance_cm;
         rcwl9620_err_t err = rcwl9620_measure_cm(CONFIG_RCWL9620_MAX_DISTANCE_CM, &distance_cm);
         if (err != RCWL9620_OK) {
             switch (err) {

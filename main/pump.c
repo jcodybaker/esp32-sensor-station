@@ -152,8 +152,8 @@ static void pump_monitor_task(void *arg) {
         const char *voltage_response = pump_send_cmd(pump_ctx, "PV,?");
         if (voltage_response != NULL) {
             // Parse response format: "?PV,12.3"
-            float voltage = 0.0f;
-            if (sscanf(voltage_response, "?PV,%f", &voltage) == 1) {
+            double voltage = 0.0;
+            if (sscanf(voltage_response, "?PV,%lf", &voltage) == 1) {
                 sensors_update(pump_ctx->voltage_sensor_id, voltage, true);
                 ESP_LOGD(TAG, "Pump voltage: %.2f V", voltage);
             } else {
@@ -169,8 +169,8 @@ static void pump_monitor_task(void *arg) {
         const char *volume_response = pump_send_cmd(pump_ctx, "TV,?");
         if (volume_response != NULL) {
             // Parse response format: "?TV,623.00"
-            float total_volume = 0.0f;
-            if (sscanf(volume_response, "?TV,%f", &total_volume) == 1) {
+            double total_volume = 0.0;
+            if (sscanf(volume_response, "?TV,%lf", &total_volume) == 1) {
                 sensors_update_with_link(pump_ctx->total_volume_sensor_id, total_volume, true, "/pump/dispense", "Dispense");
                 ESP_LOGD(TAG, "Pump total volume: %.2f ml", total_volume);
             } else {
@@ -328,7 +328,7 @@ static esp_err_t pump_calibrate_submit_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    float actual_ml = atof(actual_ml_str);
+    double actual_ml = atof(actual_ml_str);
     if (actual_ml < 0.1 || actual_ml > 20.0) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "Invalid volume value", HTTPD_RESP_USE_STRLEN);
