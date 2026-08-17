@@ -605,7 +605,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
             "<label for='flow_gpio%d'>Data GPIO Pin (-1 = disabled):</label>\n"
             "<input type='number' id='flow_gpio%d' name='flow_gpio%d' value='%d' min='-1' max='39'>\n"
             "<label for='flow_lpp%d'>Liters per Pulse:</label>\n"
-            "<input type='number' id='flow_lpp%d' name='flow_lpp%d' value='%.6f' step='0.000001' min='0'>\n"
+            "<input type='text' inputmode='decimal' id='flow_lpp%d' name='flow_lpp%d' value='%.15g'>\n"
             "</div>\n",
             i + 1, total_display, total_unit,
             i, i, i, encoded_flow_name ? encoded_flow_name : "", FLOW_SENSOR_NAME_MAX_LEN,
@@ -1270,7 +1270,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         snprintf(field_name, sizeof(field_name), "flow_lpp%d", i);
         if (httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK) {
             double flow_lpp = atof(param_buf);
-            if (flow_lpp == settings->flow_sensor_liters_per_pulse[i]) {
+            if (flow_lpp < 0.0) {
+                ESP_LOGW(TAG, "Rejecting negative flow sensor %d liters-per-pulse: '%s'", i, param_buf);
+                param_buf[0] = '\0'; // Clear to avoid updating
+            } else if (flow_lpp == settings->flow_sensor_liters_per_pulse[i]) {
                 ESP_LOGI(TAG, "Flow sensor %d liters-per-pulse unchanged", i);
                 param_buf[0] = '\0'; // Clear to avoid updating
             }
@@ -1279,7 +1282,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
                 if (err == ESP_OK) {
                     settings->flow_sensor_liters_per_pulse[i] = flow_lpp;
                     updated = true;
-                    ESP_LOGI(TAG, "Updated flow sensor %d liters-per-pulse to %.6f", i, flow_lpp);
+                    ESP_LOGI(TAG, "Updated flow sensor %d liters-per-pulse to %.15g", i, flow_lpp);
                 } else {
                     ESP_LOGE(TAG, "Failed to write %s to NVS: %s", field_name, esp_err_to_name(err));
                 }
