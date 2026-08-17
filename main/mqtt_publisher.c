@@ -16,9 +16,14 @@
 
 static const char *TAG = "mqtt_publisher";
 
+#define MQTT_RECONNECT_MIN_DELAY_MS 1000
+#define MQTT_RECONNECT_MAX_DELAY_MS (30 * 60 * 1000) // 30 minutes
+
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static settings_t *mqtt_settings = NULL;
 static bool mqtt_connected = false;
+static esp_timer_handle_t mqtt_reconnect_timer = NULL;
+static uint32_t mqtt_reconnect_delay_ms = MQTT_RECONNECT_MIN_DELAY_MS;
 static char *json_buffer = NULL;
 static size_t json_buffer_size = 512;
 static SemaphoreHandle_t json_mutex = NULL;
@@ -51,20 +56,40 @@ static void mqtt_status_task(void *pvParameters)
     }
 }
 
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, 
+// Fires after mqtt_reconnect_delay_ms elapses; forced reconnect requires
+// network.disable_auto_reconnect=true in the client config.
+static void mqtt_reconnect_timer_callback(void *arg)
+{
+    if (mqtt_client != NULL) {
+        ESP_LOGI(TAG, "Attempting MQTT reconnect (backoff was %lu ms)", (unsigned long)mqtt_reconnect_delay_ms);
+        esp_mqtt_client_reconnect(mqtt_client);
+    }
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
     esp_mqtt_event_handle_t event = event_data;
-    
+
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected to broker");
             mqtt_connected = true;
+            mqtt_reconnect_delay_ms = MQTT_RECONNECT_MIN_DELAY_MS;
             break;
-            
+
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "MQTT disconnected from broker");
+            ESP_LOGI(TAG, "MQTT disconnected from broker, retrying in %lu ms", (unsigned long)mqtt_reconnect_delay_ms);
             mqtt_connected = false;
+            if (mqtt_reconnect_timer != NULL) {
+                if (esp_timer_is_active(mqtt_reconnect_timer)) {
+                    esp_timer_stop(mqtt_reconnect_timer);
+                }
+                esp_timer_start_once(mqtt_reconnect_timer, (uint64_t)mqtt_reconnect_delay_ms * 1000ULL);
+                mqtt_reconnect_delay_ms = (mqtt_reconnect_delay_ms > MQTT_RECONNECT_MAX_DELAY_MS / 2)
+                                               ? MQTT_RECONNECT_MAX_DELAY_MS
+                                               : mqtt_reconnect_delay_ms * 2;
+            }
             break;
             
         case MQTT_EVENT_ERROR:
@@ -165,9 +190,25 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
         }
     }
     
+    // Create reconnect timer (drives our own exponential backoff instead of
+    // esp-mqtt's fixed-interval auto reconnect)
+    if (mqtt_reconnect_timer == NULL) {
+        const esp_timer_create_args_t reconnect_timer_args = {
+            .callback = &mqtt_reconnect_timer_callback,
+            .name = "mqtt_reconnect",
+        };
+        esp_err_t err = esp_timer_create(&reconnect_timer_args, &mqtt_reconnect_timer);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create MQTT reconnect timer: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+    mqtt_reconnect_delay_ms = MQTT_RECONNECT_MIN_DELAY_MS;
+
     // Configure MQTT client
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = settings->mqtt_broker_url,
+        .network.disable_auto_reconnect = true,
     };
     
     // Check if using mqtts:// and enable TLS verification
@@ -510,6 +551,12 @@ void mqtt_publisher_cleanup(void)
         ESP_LOGI(TAG, "MQTT status task stopped");
     }
     
+    if (mqtt_reconnect_timer != NULL) {
+        esp_timer_stop(mqtt_reconnect_timer);
+        esp_timer_delete(mqtt_reconnect_timer);
+        mqtt_reconnect_timer = NULL;
+    }
+
     if (mqtt_client != NULL) {
         esp_mqtt_client_stop(mqtt_client);
         esp_mqtt_client_destroy(mqtt_client);
