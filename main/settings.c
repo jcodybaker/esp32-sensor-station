@@ -767,6 +767,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "  window.scrollTo(0, 0);\n"
         "  var formData = new FormData(this);\n"
         "  var params = new URLSearchParams();\n"
+        "  // Marks this as a genuine full-form save so the server applies\n"
+        "  // checkbox fields (absent = unchecked); the tare/bias action\n"
+        "  // buttons POST here too but only ever send their one field.\n"
+        "  params.append('full_form_submit', '1');\n"
         "  // Handle BTHome objects multi-select\n"
         "  var select = document.getElementById('bthome_objects');\n"
         "  var selectedOptions = Array.from(select.selectedOptions);\n"
@@ -845,6 +849,43 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
 }
 
 
+// Parses a checkbox field and, if its value changed, persists it to NVS and
+// updates *value in place. HTML checkboxes are only present in a request
+// when checked, so a checkbox field being absent is ambiguous between
+// "the user unchecked it" and "this request never mentioned it at all" (e.g.
+// the weight sensor's Tare button and the distance sensors' Bias button
+// POST to /settings with just their one query param). is_full_form_submit
+// disambiguates that: it's only true for a genuine settings-page form save
+// (see the 'full_form_submit' marker the page's JS always includes), so
+// calling this unconditionally for every checkbox is always safe -- there's
+// no separate guard for a future checkbox to forget.
+static void settings_update_checkbox(nvs_handle_t settings_handle, char *query_buf,
+                                      bool is_full_form_submit, const char *field_name,
+                                      const char *nvs_key, bool *value, bool causes_restart,
+                                      bool *updated, bool *restart_needed) {
+    if (!is_full_form_submit) {
+        return;
+    }
+
+    char param_buf[8];
+    bool new_value = httpd_query_key_value(query_buf, field_name, param_buf, sizeof(param_buf)) == ESP_OK;
+    if (new_value == *value) {
+        return;
+    }
+
+    esp_err_t err = nvs_set_u8(settings_handle, nvs_key, new_value ? 1 : 0);
+    if (err == ESP_OK) {
+        *value = new_value;
+        *updated = true;
+        if (causes_restart) {
+            *restart_needed = true;
+        }
+        ESP_LOGI(TAG, "Updated %s to %d", field_name, new_value);
+    } else {
+        ESP_LOGE(TAG, "Failed to write %s to NVS: %s", field_name, esp_err_to_name(err));
+    }
+}
+
 static esp_err_t settings_post_handler(httpd_req_t *req) {
     settings_t *settings = (settings_t *)req->user_ctx;
     esp_err_t err = ESP_OK;
@@ -913,7 +954,16 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
     // Buffer for parameter values
     char param_buf[256];
     char decoded_param[256];
-    
+
+    // True only for a genuine settings-page form save (its JS always
+    // includes this marker) -- false for the tare/bias action links, which
+    // POST to this same endpoint with just their one query param. Gates
+    // every checkbox field via settings_update_checkbox() below, since an
+    // absent checkbox is otherwise indistinguishable from "explicitly
+    // unchecked".
+    bool is_full_form_submit =
+        httpd_query_key_value(query_buf, "full_form_submit", param_buf, sizeof(param_buf)) == ESP_OK;
+
     // Check and update password
     if (httpd_query_key_value(query_buf, "password", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -1371,48 +1421,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
-    // Check and update flow_use_gallons. Only evaluated on a full settings-page
-    // form submit (has a POST body) -- the tare/bias action links reuse this
-    // handler with just their one query param, and an unchecked-looking
-    // checkbox there doesn't mean the user actually wants it unchecked.
-    if (content_len > 0) {
-        bool flow_use_gallons = false;
-        if (httpd_query_key_value(query_buf, "flow_use_gallons", param_buf, sizeof(param_buf)) == ESP_OK) {
-            flow_use_gallons = true;
-        }
-        if (flow_use_gallons != settings->flow_use_gallons) {
-            err = nvs_set_u8(settings_handle, "flow_gal", flow_use_gallons ? 1 : 0);
-            if (err == ESP_OK) {
-                settings->flow_use_gallons = flow_use_gallons;
-                updated = true;
-                ESP_LOGI(TAG, "Updated flow_use_gallons to %d", flow_use_gallons);
-            } else {
-                ESP_LOGE(TAG, "Failed to write flow_use_gallons to NVS: %s", esp_err_to_name(err));
-            }
-        }
-    }
+    settings_update_checkbox(settings_handle, query_buf, is_full_form_submit,
+                              "flow_use_gallons", "flow_gal", &settings->flow_use_gallons,
+                              false, &updated, &restart_needed);
 
-    // Check and update bthome_enabled. Only evaluated on a full settings-page
-    // form submit (has a POST body) -- the tare/bias action links reuse this
-    // handler with just their one query param, and this checkbox would read
-    // as "absent" there the same way every other checkbox on this page does.
-    if (content_len > 0) {
-        bool bthome_enabled = false;
-        if (httpd_query_key_value(query_buf, "bthome_enabled", param_buf, sizeof(param_buf)) == ESP_OK) {
-            bthome_enabled = true;
-        }
-        if (bthome_enabled != settings->bthome_enabled) {
-            err = nvs_set_u8(settings_handle, "bthome_en", bthome_enabled ? 1 : 0);
-            if (err == ESP_OK) {
-                settings->bthome_enabled = bthome_enabled;
-                updated = true;
-                restart_needed = true;
-                ESP_LOGI(TAG, "Updated bthome_enabled to %d", bthome_enabled);
-            } else {
-                ESP_LOGE(TAG, "Failed to write bthome_enabled to NVS: %s", esp_err_to_name(err));
-            }
-        }
-    }
+    settings_update_checkbox(settings_handle, query_buf, is_full_form_submit,
+                              "bthome_enabled", "bthome_en", &settings->bthome_enabled,
+                              true, &updated, &restart_needed);
 
     if (httpd_query_key_value(query_buf, "wifi_ssid", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
@@ -1460,53 +1475,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
-    // Check and update wifi_ap_fallback_disable. Only evaluated on a full
-    // settings-page form submit (has a POST body) -- the tare/bias action
-    // links reuse this handler with just their one query param, and an
-    // unchecked-looking checkbox there doesn't mean the user actually wants
-    // it unchecked.
-    if (content_len > 0) {
-        bool wifi_ap_fallback_disable = false;
-        if (httpd_query_key_value(query_buf, "wifi_ap_fallback_disable", param_buf, sizeof(param_buf)) == ESP_OK) {
-            wifi_ap_fallback_disable = true;
-        }
-        if (wifi_ap_fallback_disable != settings->wifi_ap_fallback_disable) {
-            err = nvs_set_u8(settings_handle, "wifi_ap_fb_dis", wifi_ap_fallback_disable ? 1 : 0);
-            if (err == ESP_OK) {
-                settings->wifi_ap_fallback_disable = wifi_ap_fallback_disable;
-                updated = true;
-                ESP_LOGI(TAG, "Updated wifi_ap_fallback_disable to %d", wifi_ap_fallback_disable);
-            } else {
-                ESP_LOGE(TAG, "Failed to write wifi_ap_fallback_disable to NVS: %s", esp_err_to_name(err));
-            }
-        } else {
-            ESP_LOGI(TAG, "WiFi AP fallback disable unchanged");
-        }
-    }
+    settings_update_checkbox(settings_handle, query_buf, is_full_form_submit,
+                              "wifi_ap_fallback_disable", "wifi_ap_fb_dis",
+                              &settings->wifi_ap_fallback_disable, false, &updated, &restart_needed);
 
-    // Check and update temp_use_fahrenheit. Only evaluated on a full settings-page
-    // form submit (has a POST body) -- the tare/bias action links reuse this
-    // handler with just their one query param, and an unchecked-looking
-    // checkbox there doesn't mean the user actually wants it unchecked.
-    if (content_len > 0) {
-        bool temp_use_fahrenheit = false;
-        if (httpd_query_key_value(query_buf, "temp_use_fahrenheit", param_buf, sizeof(param_buf)) == ESP_OK) {
-            temp_use_fahrenheit = true;
-        }
-        if (temp_use_fahrenheit != settings->temp_use_fahrenheit) {
-            err = nvs_set_u8(settings_handle, "temp_use_f", temp_use_fahrenheit ? 1 : 0);
-            if (err == ESP_OK) {
-                settings->temp_use_fahrenheit = temp_use_fahrenheit;
-                updated = true;
-                restart_needed = true;
-                ESP_LOGI(TAG, "Updated temp_use_fahrenheit to %d", temp_use_fahrenheit);
-            } else {
-                ESP_LOGE(TAG, "Failed to write temp_use_fahrenheit to NVS: %s", esp_err_to_name(err));
-            }
-        } else {
-            ESP_LOGI(TAG, "Temperature unit setting unchanged");
-        }
-    }
+    settings_update_checkbox(settings_handle, query_buf, is_full_form_submit,
+                              "temp_use_fahrenheit", "temp_use_f", &settings->temp_use_fahrenheit,
+                              true, &updated, &restart_needed);
 
     // Check and update syslog_server
     if (httpd_query_key_value(query_buf, "syslog_server", param_buf, sizeof(param_buf)) == ESP_OK) {
