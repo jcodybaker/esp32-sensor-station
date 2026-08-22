@@ -69,6 +69,15 @@ void app_main(void)
         m5stick_display_power_init();
 
         sensors_init(settings, http_server);
+
+        // Create the display task now, before the heavier drivers below
+        // (BLE for BTHome in particular) claim most of free heap. On the
+        // goldfish-reservoir unit, free heap bottomed out at 404 bytes
+        // during boot and xTaskCreatePinnedToCore() for the display task
+        // intermittently failed outright, leaving the backlight on with
+        // nothing ever drawn to the screen.
+        m5stick_display_init(settings);
+
         init_ds18b20(settings);
         weight_init(settings);
         bthome_observer_init(settings, http_server);
@@ -77,7 +86,6 @@ void app_main(void)
         rcwl9620_init(settings);
         a02yyuw_init(settings);
         flow_sensor_init(settings);
-        m5stick_display_init(settings);
     }
     
     ota_init(settings, http_server);

@@ -79,6 +79,7 @@ static bool sta_configured = false;
 static bool ap_active = false;
 static bool ap_configured = false;
 static esp_timer_handle_t ap_watchdog_timer = NULL;
+static esp_timer_handle_t ntp_retry_timer = NULL;
 extern bool g_ntp_initialized;
 
 void ntp_configure(void);
@@ -371,12 +372,52 @@ void time_sync_notification_cb(struct timeval *tv)
 {
     g_ntp_initialized = true;
     ESP_LOGI(TAG, "Notification of a time synchronization event");
+    if (ntp_retry_timer) {
+        esp_timer_stop(ntp_retry_timer);
+    }
+}
+
+// On the goldfish-reservoir unit, free heap bottomed out near zero during
+// boot (BLE + WiFi + MQTT/TLS all initializing within the same few hundred
+// ms) and SNTP's very first sync attempt silently lost that race -- with
+// WiFi never disconnecting afterward, esp_netif_sntp's renew-on-GOT_IP never
+// got a second chance to fire, leaving g_ntp_initialized false for 5+ days.
+// Retry periodically until it succeeds so a single bad boot can't wedge NTP
+// (and therefore BTHome ingestion, which refuses packets until synced) for
+// the rest of the device's uptime.
+#define NTP_RETRY_INTERVAL_US (5ULL * 60ULL * 1000000ULL)
+
+static void ntp_retry_callback(void *arg)
+{
+    if (g_ntp_initialized) {
+        esp_timer_stop(ntp_retry_timer);
+        return;
+    }
+    ESP_LOGW(TAG, "NTP still not synchronized after retry interval, restarting SNTP");
+    esp_netif_sntp_start();
+}
+
+static void ntp_retry_watchdog_start(void)
+{
+    const esp_timer_create_args_t timer_args = {
+        .callback = &ntp_retry_callback,
+        .name = "ntp_retry",
+    };
+    esp_err_t err = esp_timer_create(&timer_args, &ntp_retry_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create NTP retry timer: %s", esp_err_to_name(err));
+        return;
+    }
+    err = esp_timer_start_periodic(ntp_retry_timer, NTP_RETRY_INTERVAL_US);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start NTP retry timer: %s", esp_err_to_name(err));
+    }
 }
 
 void ntp_configure(void) {
     ESP_LOGI(TAG, "Configuring NTP");
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    config.start = false;                      
+    config.start = false;
     config.server_from_dhcp = true;
     config.renew_servers_after_new_IP = true;
     config.index_of_first_server = 1;
@@ -384,4 +425,5 @@ void ntp_configure(void) {
     config.sync_cb = time_sync_notification_cb;
     esp_netif_sntp_init(&config);
     esp_netif_sntp_start();
+    ntp_retry_watchdog_start();
 }
