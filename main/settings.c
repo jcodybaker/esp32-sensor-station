@@ -631,9 +631,16 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
     }
 
     // Send BTHome object IDs multi-select
-    httpd_resp_sendstr_chunk(req,
+    snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
         "<h2>BTHome Configuration</h2>\n"
+        "<label for='bthome_enabled'>\n"
+        "<input type='checkbox' id='bthome_enabled' name='bthome_enabled' value='1'%s> Enable BTHome BLE Observer (requires restart; only relevant on devices with BTHome peripherals nearby)\n"
+        "</label>\n",
+        settings->bthome_enabled ? " checked" : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    httpd_resp_sendstr_chunk(req,
         "<label for='bthome_objects'>BTHome Objects to Monitor:</label>\n"
         "<select id='bthome_objects' name='bthome_objects' multiple size='10' style='height: 200px;'>\n");
     
@@ -1377,6 +1384,28 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             ESP_LOGI(TAG, "Updated flow_use_gallons to %d", flow_use_gallons);
         } else {
             ESP_LOGE(TAG, "Failed to write flow_use_gallons to NVS: %s", esp_err_to_name(err));
+        }
+    }
+
+    // Check and update bthome_enabled. Only evaluated on a full settings-page
+    // form submit (has a POST body) -- the tare/bias action links reuse this
+    // handler with just their one query param, and this checkbox would read
+    // as "absent" there the same way every other checkbox on this page does.
+    if (content_len > 0) {
+        bool bthome_enabled = false;
+        if (httpd_query_key_value(query_buf, "bthome_enabled", param_buf, sizeof(param_buf)) == ESP_OK) {
+            bthome_enabled = true;
+        }
+        if (bthome_enabled != settings->bthome_enabled) {
+            err = nvs_set_u8(settings_handle, "bthome_en", bthome_enabled ? 1 : 0);
+            if (err == ESP_OK) {
+                settings->bthome_enabled = bthome_enabled;
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated bthome_enabled to %d", bthome_enabled);
+            } else {
+                ESP_LOGE(TAG, "Failed to write bthome_enabled to NVS: %s", esp_err_to_name(err));
+            }
         }
     }
 
@@ -2230,6 +2259,7 @@ esp_err_t settings_init(settings_t *settings)
         settings->flow_sensor_name[i][0] = '\0';
     }
     settings->flow_use_gallons = false;
+    settings->bthome_enabled = false;
     settings->syslog_server = NULL;
     settings->syslog_port = 514;  // Default syslog port
     settings->mqtt_broker_url = NULL;
@@ -2884,6 +2914,23 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading flow_use_gallons!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'bthome_enabled' from NVS...");
+    uint8_t bthome_enabled_value;
+    err = nvs_get_u8(settings_handle, "bthome_en", &bthome_enabled_value);
+    switch (err) {
+        case ESP_OK:
+            settings->bthome_enabled = bthome_enabled_value != 0;
+            ESP_LOGI(TAG, "Read 'bthome_enabled' = %d", settings->bthome_enabled);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->bthome_enabled = false;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'bthome_enabled'; using default = %d (disabled)", settings->bthome_enabled);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading bthome_enabled!", esp_err_to_name(err));
             return err;
     }
 

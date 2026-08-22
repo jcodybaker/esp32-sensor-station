@@ -501,7 +501,7 @@ CONFIG_ENABLE_FLOW_SENSOR=y
 #
 # BTHome BLE Observer Configuration
 #
-# CONFIG_ENABLE_BTHOME is not set
+CONFIG_ENABLE_BTHOME=y
 # end of BTHome BLE Observer Configuration
 
 #

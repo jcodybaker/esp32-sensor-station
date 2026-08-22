@@ -589,9 +589,14 @@ static void bthome_packet_callback(esp_bd_addr_t addr, int rssi,
 }
 
 void bthome_observer_init(settings_t *settings, httpd_handle_t server) {
+    if (!settings->bthome_enabled) {
+        ESP_LOGI(TAG, "BTHome BLE observer disabled in settings, skipping (enable in Settings and restart)");
+        return;
+    }
+
     // Store settings pointer for filtering
     g_settings = settings;
-    
+
     // Initialize cache
     memset(packet_cache, 0, sizeof(packet_cache));
     cache_mutex = xSemaphoreCreateMutex();

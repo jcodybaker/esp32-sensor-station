@@ -61,6 +61,7 @@ typedef struct {
     double flow_sensor_total_liters[FLOW_SENSOR_COUNT];    // Running total, in liters (persisted only if CONFIG_FLOW_SENSOR_PERSIST_TOTALS)
     char flow_sensor_name[FLOW_SENSOR_COUNT][FLOW_SENSOR_NAME_MAX_LEN + 1]; // User-assigned names (empty = "Flow N")
     bool flow_use_gallons;             // Display flow totals in gallons (true) or liters (false)
+    bool bthome_enabled;               // Enable BTHome BLE observer at runtime (requires restart to take effect)
     bool temp_use_fahrenheit;          // Display temperatures in Fahrenheit (true) or Celsius (false)
     char *syslog_server;               // Syslog server hostname or IP address
     uint16_t syslog_port;              // Syslog server port (default 514)

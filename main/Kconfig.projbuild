@@ -269,15 +269,15 @@ menu "BTHome BLE Observer Configuration"
 
     config ENABLE_BTHOME
         bool "Enable BTHome BLE observer support"
-        default n
+        default y
         help
-            Enables passive BLE scanning for BTHome broadcast sensors (e.g. Xiaomi/Mijia
-            thermometers and hall-effect door/water sensors) via the Bluedroid BLE stack.
-            Disabled by default -- only a handful of sensor station devices actually have
-            BTHome peripherals nearby, and Bluedroid is one of the largest single
-            consumers of heap at boot. On devices that don't use it, initializing it
-            anyway competes for memory with everything else starting up at the same time
-            (WiFi, MQTT/TLS, the HTTP server, other sensor drivers) and has caused
-            boot-time heap exhaustion. Enable only for firmware builds targeting a device
-            that actually has BTHome peripherals to observe.
+            Compiles in support for passive BLE scanning of BTHome broadcast sensors
+            (e.g. Xiaomi/Mijia thermometers and hall-effect door/water sensors) via the
+            Bluedroid BLE stack. Matches the pattern of the other optional sensor
+            drivers: compiled into the shared firmware image by default, but inert at
+            runtime -- Bluedroid is never initialized, and consumes no heap, unless
+            "Enable BTHome BLE Observer" is turned on in Settings (off by default) for a
+            specific device. Only disable this entirely (excluding it from the build) if
+            a firmware variant will never run on any device with BTHome peripherals and
+            the flash savings matter more than a single shared image.
 endmenu
