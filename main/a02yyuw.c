@@ -26,6 +26,7 @@ static const char *TAG = "a02yyuw";
 static int sensor_id_cm = -1;
 
 static void a02yyuw_task(void *pvParameters) {
+    settings_t *settings = (settings_t *)pvParameters;
     uint8_t frame[A02YYUW_FRAME_SIZE];
     int frame_pos = 0;
 
@@ -64,7 +65,11 @@ static void a02yyuw_task(void *pvParameters) {
 
         double distance_cm = distance_mm / 10.0;
         ESP_LOGD(TAG, "Distance: %.1f cm", distance_cm);
-        sensors_update(sensor_id_cm, distance_cm, true);
+        // Build bias URL with current raw value, so clicking "Bias" defines
+        // this reading as the "normal" position (mirrors weight.c's tare link).
+        char bias_url[64];
+        snprintf(bias_url, sizeof(bias_url), "/settings?a02yyuw_bias_cm=%.2f", distance_cm);
+        sensors_update_with_link(sensor_id_cm, distance_cm - settings->a02yyuw_bias_cm, true, bias_url, "Bias");
     }
 }
 

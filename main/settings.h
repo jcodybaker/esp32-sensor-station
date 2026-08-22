@@ -53,7 +53,9 @@ typedef struct {
     int8_t ezo_ph_i2c_addr;            // Atlas Scientific EZO pH I2C device address (0 = disabled), shares the sensor I2C bus
     int8_t rcwl9620_trigger_gpio;       // RCWL-9620 ultrasonic sensor trigger GPIO pin (-1 = disabled)
     int8_t rcwl9620_echo_gpio;          // RCWL-9620 ultrasonic sensor echo GPIO pin (-1 = disabled)
+    double rcwl9620_bias_cm;            // Distance (cm) reported as "normal"; subtracted from raw readings
     int8_t a02yyuw_rx_gpio;             // A02YYUW ultrasonic sensor UART RX GPIO pin (-1 = disabled)
+    double a02yyuw_bias_cm;             // Distance (cm) reported as "normal"; subtracted from raw readings
     int8_t flow_sensor_gpio[FLOW_SENSOR_COUNT];            // Hall-effect flow sensor data GPIO pins (-1 = disabled)
     double flow_sensor_liters_per_pulse[FLOW_SENSOR_COUNT]; // Liters added to the running total per pulse
     double flow_sensor_total_liters[FLOW_SENSOR_COUNT];    // Running total, in liters (persisted only if CONFIG_FLOW_SENSOR_PERSIST_TOTALS)

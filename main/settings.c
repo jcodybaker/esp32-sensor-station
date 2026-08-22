@@ -570,6 +570,13 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->rcwl9620_echo_gpio);
     httpd_resp_sendstr_chunk(req, buffer);
 
+    // Send rcwl9620_bias_cm with current value
+    snprintf(buffer, 1024,
+        "<label for='rcwl9620_bias_cm'>RCWL-9620 Bias (cm, subtracted from raw distance):</label>\n"
+        "<input type='text' inputmode='decimal' id='rcwl9620_bias_cm' name='rcwl9620_bias_cm' value='%.3f'>\n",
+        settings->rcwl9620_bias_cm);
+    httpd_resp_sendstr_chunk(req, buffer);
+
     // Send a02yyuw_rx_gpio with current value
     snprintf(buffer, 1024,
         "<hr class='minor'/>\n"
@@ -577,6 +584,13 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "<label for='a02yyuw_rx_gpio'>A02YYUW UART RX GPIO Pin (-1 = disabled):</label>\n"
         "<input type='number' id='a02yyuw_rx_gpio' name='a02yyuw_rx_gpio' value='%d' min='-1' max='39'>\n",
         settings->a02yyuw_rx_gpio);
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Send a02yyuw_bias_cm with current value
+    snprintf(buffer, 1024,
+        "<label for='a02yyuw_bias_cm'>A02YYUW Bias (cm, subtracted from raw distance):</label>\n"
+        "<input type='text' inputmode='decimal' id='a02yyuw_bias_cm' name='a02yyuw_bias_cm' value='%.3f'>\n",
+        settings->a02yyuw_bias_cm);
     httpd_resp_sendstr_chunk(req, buffer);
 
     // Send flow sensor configuration
@@ -1223,6 +1237,25 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
+    // Check and update rcwl9620_bias_cm
+    if (httpd_query_key_value(query_buf, "rcwl9620_bias_cm", param_buf, sizeof(param_buf)) == ESP_OK) {
+        double rcwl9620_bias_cm = atof(param_buf);
+        if (rcwl9620_bias_cm == settings->rcwl9620_bias_cm) {
+            ESP_LOGI(TAG, "RCWL-9620 bias unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_blob(settings_handle, "rcwl9620_bias", &rcwl9620_bias_cm, sizeof(rcwl9620_bias_cm));
+            if (err == ESP_OK) {
+                settings->rcwl9620_bias_cm = rcwl9620_bias_cm;
+                updated = true;
+                ESP_LOGI(TAG, "Updated rcwl9620_bias_cm to %.3f", rcwl9620_bias_cm);
+            } else {
+                ESP_LOGE(TAG, "Failed to write rcwl9620_bias_cm to NVS: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
     // Check and update a02yyuw_rx_gpio
     if (httpd_query_key_value(query_buf, "a02yyuw_rx_gpio", param_buf, sizeof(param_buf)) == ESP_OK) {
         int8_t a02yyuw_rx_gpio = (int8_t)atoi(param_buf);
@@ -1240,6 +1273,25 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
                 ESP_LOGE(TAG, "Failed to write a02yyuw_rx_gpio to NVS: %s", esp_err_to_name(err));
             }
             restart_needed = true;
+        }
+    }
+
+    // Check and update a02yyuw_bias_cm
+    if (httpd_query_key_value(query_buf, "a02yyuw_bias_cm", param_buf, sizeof(param_buf)) == ESP_OK) {
+        double a02yyuw_bias_cm = atof(param_buf);
+        if (a02yyuw_bias_cm == settings->a02yyuw_bias_cm) {
+            ESP_LOGI(TAG, "A02YYUW bias unchanged");
+            param_buf[0] = '\0'; // Clear to avoid updating
+        }
+        if (strlen(param_buf) > 0) {
+            err = nvs_set_blob(settings_handle, "a02yyuw_bias", &a02yyuw_bias_cm, sizeof(a02yyuw_bias_cm));
+            if (err == ESP_OK) {
+                settings->a02yyuw_bias_cm = a02yyuw_bias_cm;
+                updated = true;
+                ESP_LOGI(TAG, "Updated a02yyuw_bias_cm to %.3f", a02yyuw_bias_cm);
+            } else {
+                ESP_LOGE(TAG, "Failed to write a02yyuw_bias_cm to NVS: %s", esp_err_to_name(err));
+            }
         }
     }
 
@@ -2168,7 +2220,9 @@ esp_err_t settings_init(settings_t *settings)
     settings->ezo_ph_i2c_addr = 0x63;
     settings->rcwl9620_trigger_gpio = -1;
     settings->rcwl9620_echo_gpio = -1;
+    settings->rcwl9620_bias_cm = 0.0;
     settings->a02yyuw_rx_gpio = -1;
+    settings->a02yyuw_bias_cm = 0.0;
     for (int i = 0; i < FLOW_SENSOR_COUNT; i++) {
         settings->flow_sensor_gpio[i] = -1;
         settings->flow_sensor_liters_per_pulse[i] = 0.0;
@@ -2655,6 +2709,24 @@ esp_err_t settings_init(settings_t *settings)
             return err;
     }
 
+    ESP_LOGI(TAG, "Reading 'rcwl9620_bias_cm' from NVS...");
+    double rcwl9620_bias_value;
+    size_t rcwl9620_bias_size = sizeof(rcwl9620_bias_value);
+    err = nvs_get_blob(settings_handle, "rcwl9620_bias", &rcwl9620_bias_value, &rcwl9620_bias_size);
+    switch (err) {
+        case ESP_OK:
+            settings->rcwl9620_bias_cm = rcwl9620_bias_value;
+            ESP_LOGI(TAG, "Read 'rcwl9620_bias_cm' = %.3f", settings->rcwl9620_bias_cm);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->rcwl9620_bias_cm = 0.0;
+            ESP_LOGI(TAG, "No value for 'rcwl9620_bias_cm'; using default = 0.0");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading rcwl9620_bias_cm!", esp_err_to_name(err));
+            return err;
+    }
+
     ESP_LOGI(TAG, "Reading 'a02yyuw_rx_gpio' from NVS...");
     int8_t a02yyuw_rx_gpio_value;
     err = nvs_get_i8(settings_handle, "a02yyuw_rx_gpio", &a02yyuw_rx_gpio_value);
@@ -2669,6 +2741,24 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading a02yyuw_rx_gpio!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'a02yyuw_bias_cm' from NVS...");
+    double a02yyuw_bias_value;
+    size_t a02yyuw_bias_size = sizeof(a02yyuw_bias_value);
+    err = nvs_get_blob(settings_handle, "a02yyuw_bias", &a02yyuw_bias_value, &a02yyuw_bias_size);
+    switch (err) {
+        case ESP_OK:
+            settings->a02yyuw_bias_cm = a02yyuw_bias_value;
+            ESP_LOGI(TAG, "Read 'a02yyuw_bias_cm' = %.3f", settings->a02yyuw_bias_cm);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->a02yyuw_bias_cm = 0.0;
+            ESP_LOGI(TAG, "No value for 'a02yyuw_bias_cm'; using default = 0.0");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading a02yyuw_bias_cm!", esp_err_to_name(err));
             return err;
     }
 

@@ -68,6 +68,8 @@ static rcwl9620_err_t rcwl9620_measure_cm(uint32_t max_distance_cm, double *dist
 }
 
 static void rcwl9620_task(void *pvParameters) {
+    settings_t *settings = (settings_t *)pvParameters;
+
     while (1) {
         double distance_cm;
         rcwl9620_err_t err = rcwl9620_measure_cm(CONFIG_RCWL9620_MAX_DISTANCE_CM, &distance_cm);
@@ -85,7 +87,11 @@ static void rcwl9620_task(void *pvParameters) {
             sensors_update(sensor_id_cm, 0.0f, false);
         } else {
             ESP_LOGI(TAG, "Distance: %.2f cm", distance_cm);
-            sensors_update(sensor_id_cm, distance_cm, true);
+            // Build bias URL with current raw value, so clicking "Bias" defines
+            // this reading as the "normal" position (mirrors weight.c's tare link).
+            char bias_url[64];
+            snprintf(bias_url, sizeof(bias_url), "/settings?rcwl9620_bias_cm=%.2f", distance_cm);
+            sensors_update_with_link(sensor_id_cm, distance_cm - settings->rcwl9620_bias_cm, true, bias_url, "Bias");
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
