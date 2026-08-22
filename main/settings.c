@@ -2196,7 +2196,6 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         } else {
             httpd_resp_send(req, "Settings updated successfully", HTTPD_RESP_USE_STRLEN);
         }
-        httpd_resp_send(req, "Settings updated successfully", HTTPD_RESP_USE_STRLEN);
         if (restart_needed) {
             ESP_LOGI(TAG, "Restarting system to apply changes...");
             vTaskDelay(pdMS_TO_TICKS(250));
