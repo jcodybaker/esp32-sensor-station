@@ -1371,19 +1371,24 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
-    // Check and update flow_use_gallons
-    bool flow_use_gallons = false;
-    if (httpd_query_key_value(query_buf, "flow_use_gallons", param_buf, sizeof(param_buf)) == ESP_OK) {
-        flow_use_gallons = true;
-    }
-    if (flow_use_gallons != settings->flow_use_gallons) {
-        err = nvs_set_u8(settings_handle, "flow_gal", flow_use_gallons ? 1 : 0);
-        if (err == ESP_OK) {
-            settings->flow_use_gallons = flow_use_gallons;
-            updated = true;
-            ESP_LOGI(TAG, "Updated flow_use_gallons to %d", flow_use_gallons);
-        } else {
-            ESP_LOGE(TAG, "Failed to write flow_use_gallons to NVS: %s", esp_err_to_name(err));
+    // Check and update flow_use_gallons. Only evaluated on a full settings-page
+    // form submit (has a POST body) -- the tare/bias action links reuse this
+    // handler with just their one query param, and an unchecked-looking
+    // checkbox there doesn't mean the user actually wants it unchecked.
+    if (content_len > 0) {
+        bool flow_use_gallons = false;
+        if (httpd_query_key_value(query_buf, "flow_use_gallons", param_buf, sizeof(param_buf)) == ESP_OK) {
+            flow_use_gallons = true;
+        }
+        if (flow_use_gallons != settings->flow_use_gallons) {
+            err = nvs_set_u8(settings_handle, "flow_gal", flow_use_gallons ? 1 : 0);
+            if (err == ESP_OK) {
+                settings->flow_use_gallons = flow_use_gallons;
+                updated = true;
+                ESP_LOGI(TAG, "Updated flow_use_gallons to %d", flow_use_gallons);
+            } else {
+                ESP_LOGE(TAG, "Failed to write flow_use_gallons to NVS: %s", esp_err_to_name(err));
+            }
         }
     }
 
@@ -1455,41 +1460,52 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
         }
     }
 
-    // Check and update wifi_ap_fallback_disable
-    bool wifi_ap_fallback_disable = false;
-    if (httpd_query_key_value(query_buf, "wifi_ap_fallback_disable", param_buf, sizeof(param_buf)) == ESP_OK) {
-        wifi_ap_fallback_disable = true;
-    }
-    if (wifi_ap_fallback_disable != settings->wifi_ap_fallback_disable) {
-        err = nvs_set_u8(settings_handle, "wifi_ap_fb_dis", wifi_ap_fallback_disable ? 1 : 0);
-        if (err == ESP_OK) {
-            settings->wifi_ap_fallback_disable = wifi_ap_fallback_disable;
-            updated = true;
-            ESP_LOGI(TAG, "Updated wifi_ap_fallback_disable to %d", wifi_ap_fallback_disable);
-        } else {
-            ESP_LOGE(TAG, "Failed to write wifi_ap_fallback_disable to NVS: %s", esp_err_to_name(err));
+    // Check and update wifi_ap_fallback_disable. Only evaluated on a full
+    // settings-page form submit (has a POST body) -- the tare/bias action
+    // links reuse this handler with just their one query param, and an
+    // unchecked-looking checkbox there doesn't mean the user actually wants
+    // it unchecked.
+    if (content_len > 0) {
+        bool wifi_ap_fallback_disable = false;
+        if (httpd_query_key_value(query_buf, "wifi_ap_fallback_disable", param_buf, sizeof(param_buf)) == ESP_OK) {
+            wifi_ap_fallback_disable = true;
         }
-    } else {
-        ESP_LOGI(TAG, "WiFi AP fallback disable unchanged");
+        if (wifi_ap_fallback_disable != settings->wifi_ap_fallback_disable) {
+            err = nvs_set_u8(settings_handle, "wifi_ap_fb_dis", wifi_ap_fallback_disable ? 1 : 0);
+            if (err == ESP_OK) {
+                settings->wifi_ap_fallback_disable = wifi_ap_fallback_disable;
+                updated = true;
+                ESP_LOGI(TAG, "Updated wifi_ap_fallback_disable to %d", wifi_ap_fallback_disable);
+            } else {
+                ESP_LOGE(TAG, "Failed to write wifi_ap_fallback_disable to NVS: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGI(TAG, "WiFi AP fallback disable unchanged");
+        }
     }
 
-    // Check and update temp_use_fahrenheit
-    bool temp_use_fahrenheit = false;
-    if (httpd_query_key_value(query_buf, "temp_use_fahrenheit", param_buf, sizeof(param_buf)) == ESP_OK) {
-        temp_use_fahrenheit = true;
-    }
-    if (temp_use_fahrenheit != settings->temp_use_fahrenheit) {
-        err = nvs_set_u8(settings_handle, "temp_use_f", temp_use_fahrenheit ? 1 : 0);
-        if (err == ESP_OK) {
-            settings->temp_use_fahrenheit = temp_use_fahrenheit;
-            updated = true;
-            restart_needed = true;
-            ESP_LOGI(TAG, "Updated temp_use_fahrenheit to %d", temp_use_fahrenheit);
-        } else {
-            ESP_LOGE(TAG, "Failed to write temp_use_fahrenheit to NVS: %s", esp_err_to_name(err));
+    // Check and update temp_use_fahrenheit. Only evaluated on a full settings-page
+    // form submit (has a POST body) -- the tare/bias action links reuse this
+    // handler with just their one query param, and an unchecked-looking
+    // checkbox there doesn't mean the user actually wants it unchecked.
+    if (content_len > 0) {
+        bool temp_use_fahrenheit = false;
+        if (httpd_query_key_value(query_buf, "temp_use_fahrenheit", param_buf, sizeof(param_buf)) == ESP_OK) {
+            temp_use_fahrenheit = true;
         }
-    } else {
-        ESP_LOGI(TAG, "Temperature unit setting unchanged");
+        if (temp_use_fahrenheit != settings->temp_use_fahrenheit) {
+            err = nvs_set_u8(settings_handle, "temp_use_f", temp_use_fahrenheit ? 1 : 0);
+            if (err == ESP_OK) {
+                settings->temp_use_fahrenheit = temp_use_fahrenheit;
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated temp_use_fahrenheit to %d", temp_use_fahrenheit);
+            } else {
+                ESP_LOGE(TAG, "Failed to write temp_use_fahrenheit to NVS: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGI(TAG, "Temperature unit setting unchanged");
+        }
     }
 
     // Check and update syslog_server
