@@ -27,3 +27,22 @@ CONFIG_OTA_FIRMWARE_UPGRADE_URL="https://github.com/jcodybaker/esp32-sensor-stat
 # if the base sdkconfig/Kconfig defaults change later.
 CONFIG_ENABLE_FLOW_SENSOR=y
 # CONFIG_FLOW_SENSOR_PERSIST_TOTALS is not set
+
+# BTHome BLE observation isn't used on M5StickC Plus display units; explicit
+# here (matching the Kconfig default) so this variant's disabled features stay
+# documented even if the base default changes later.
+# CONFIG_ENABLE_BTHOME is not set
+
+# Bluedroid reserves heap for its GATT server/client and pairing/bonding at
+# init regardless of whether the app uses them; this build only ever does
+# passive BLE scanning (and only when CONFIG_ENABLE_BTHOME is on for a
+# specific device), so disable all three -- one of the largest contributors
+# to the boot-time heap exhaustion that broke the M5Stick display task.
+# CONFIG_BT_GATTS_ENABLE is not set
+# CONFIG_BT_GATTC_ENABLE is not set
+# CONFIG_BT_BLE_SMP_ENABLE is not set
+
+# Without this, mbedtls allocates the full CONFIG_MBEDTLS_SSL_IN/OUT_CONTENT_LEN
+# (16KB/4KB) for the life of every TLS connection (MQTT, OTA) regardless of
+# actual record size. Enabling it lets buffers shrink to what's in flight.
+CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH=y

@@ -1,3 +1,7 @@
+#include "bthome_observer.h"
+
+#if CONFIG_ENABLE_BTHOME
+
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
@@ -9,7 +13,6 @@
 #include "bthome_ble.h"
 #include "settings.h"
 #include "http_server.h"
-#include "bthome_observer.h"
 #include "sensors.h"
 
 static const char *TAG = "bthome_observer";
@@ -695,6 +698,20 @@ void bthome_cache_iterate(bthome_cache_iterator_t callback, void *user_data) {
             }
         }
     }
-    
+
     xSemaphoreGive(cache_mutex);
 }
+
+#else // !CONFIG_ENABLE_BTHOME
+
+void bthome_observer_init(settings_t *settings, httpd_handle_t server) {
+    (void)settings;
+    (void)server;
+}
+
+void bthome_cache_iterate(bthome_cache_iterator_t callback, void *user_data) {
+    (void)callback;
+    (void)user_data;
+}
+
+#endif // CONFIG_ENABLE_BTHOME

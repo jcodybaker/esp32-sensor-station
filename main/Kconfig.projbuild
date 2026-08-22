@@ -264,3 +264,20 @@ menu "M5StickC Plus Display Configuration"
         help
             Default LCD backlight brightness used until overridden in Settings.
 endmenu
+
+menu "BTHome BLE Observer Configuration"
+
+    config ENABLE_BTHOME
+        bool "Enable BTHome BLE observer support"
+        default n
+        help
+            Enables passive BLE scanning for BTHome broadcast sensors (e.g. Xiaomi/Mijia
+            thermometers and hall-effect door/water sensors) via the Bluedroid BLE stack.
+            Disabled by default -- only a handful of sensor station devices actually have
+            BTHome peripherals nearby, and Bluedroid is one of the largest single
+            consumers of heap at boot. On devices that don't use it, initializing it
+            anyway competes for memory with everything else starting up at the same time
+            (WiFi, MQTT/TLS, the HTTP server, other sensor drivers) and has caused
+            boot-time heap exhaustion. Enable only for firmware builds targeting a device
+            that actually has BTHome peripherals to observe.
+endmenu
