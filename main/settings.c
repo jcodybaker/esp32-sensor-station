@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <ctype.h>
+#include <string.h>
+#include <stdlib.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -101,9 +103,382 @@ static void url_decode(char *dst, const char *src) {
     *write_ptr = '\0';
 }
 
+// --- Settings backup / restore ----------------------------------------------
+//
+// Backup and restore operate on the whole "settings" NVS namespace rather than
+// on individual settings_t fields, so every persisted key is captured no matter
+// which build wrote it. The M5StickC Plus build persists a few keys (e.g.
+// lcd_brightness) the default build never touches; restoring a key the running
+// build doesn't understand is harmless, since settings_init() only reads the
+// keys it knows about and silently ignores the rest. This keeps the feature
+// identical for both the default and the m5stickcplus builds.
+//
+// Backup file format (text, one entry per line):
+//   <type>\t<key>\t<payload>\n
+// <type> is u8|i8|u16|i16|u32|i32|u64|i64|str|blob. Integer payloads are
+// decimal text; str/blob payloads are lowercase hex of the raw bytes (str
+// without its NUL terminator). Blank lines and lines starting with '#' are
+// ignored, so the header comment lines round-trip harmlessly.
+
+#define SETTINGS_NVS_NAMESPACE "settings"
+#define SETTINGS_RESTORE_MAX_BODY 16384
+
+static nvs_type_t nvs_tag_to_type(const char *tag) {
+    if (strcmp(tag, "u8") == 0)   return NVS_TYPE_U8;
+    if (strcmp(tag, "i8") == 0)   return NVS_TYPE_I8;
+    if (strcmp(tag, "u16") == 0)  return NVS_TYPE_U16;
+    if (strcmp(tag, "i16") == 0)  return NVS_TYPE_I16;
+    if (strcmp(tag, "u32") == 0)  return NVS_TYPE_U32;
+    if (strcmp(tag, "i32") == 0)  return NVS_TYPE_I32;
+    if (strcmp(tag, "u64") == 0)  return NVS_TYPE_U64;
+    if (strcmp(tag, "i64") == 0)  return NVS_TYPE_I64;
+    if (strcmp(tag, "str") == 0)  return NVS_TYPE_STR;
+    if (strcmp(tag, "blob") == 0) return NVS_TYPE_BLOB;
+    return NVS_TYPE_ANY;
+}
+
+// Writes 2*len lowercase hex chars plus a NUL into dst (needs 2*len+1 bytes).
+static void hex_encode(char *dst, const uint8_t *src, size_t len) {
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; i++) {
+        dst[i * 2]     = digits[src[i] >> 4];
+        dst[i * 2 + 1] = digits[src[i] & 0x0F];
+    }
+    dst[len * 2] = '\0';
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Decodes hex string src into dst (needs >= strlen(src)/2 bytes). Returns the
+// number of bytes written, or -1 on malformed input (odd length / non-hex).
+static int hex_decode(uint8_t *dst, const char *src) {
+    size_t n = strlen(src);
+    if (n % 2 != 0) return -1;
+    for (size_t i = 0; i < n; i += 2) {
+        int hi = hex_nibble(src[i]);
+        int lo = hex_nibble(src[i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        dst[i / 2] = (uint8_t)((hi << 4) | lo);
+    }
+    return (int)(n / 2);
+}
+
+// GET /settings/backup - streams every key in the "settings" NVS namespace as a
+// downloadable text file (see format note above).
+static esp_err_t settings_backup_get_handler(httpd_req_t *req) {
+    settings_t *settings = (settings_t *)req->user_ctx;
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(SETTINGS_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open NVS");
+        return err;
+    }
+
+    char *line = malloc(512);
+    atomic_fetch_add(&malloc_count_settings, 1);
+    if (!line) {
+        nvs_close(handle);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    httpd_resp_set_type(req, "text/plain");
+    const char *host = (settings->hostname && settings->hostname[0]) ? settings->hostname : "sensor-station";
+    // Kept in scope for the whole handler: httpd_resp_set_hdr() only stores the
+    // pointer, and the value must stay valid until the headers are flushed on
+    // the first chunk send (by which point `line` has been reused).
+    char disp[128];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s-settings-backup.txt\"", host);
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    snprintf(line, 512,
+        "# ESP32 Sensor Station settings backup v1\n"
+        "# host=%s fw=%s\n", host, app_desc->version);
+    httpd_resp_sendstr_chunk(req, line);
+
+    nvs_iterator_t it = NULL;
+    err = nvs_entry_find(NVS_DEFAULT_PART_NAME, SETTINGS_NVS_NAMESPACE, NVS_TYPE_ANY, &it);
+    while (err == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+
+        switch (info.type) {
+            case NVS_TYPE_U8: {
+                uint8_t v;
+                if (nvs_get_u8(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "u8\t%s\t%u\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_I8: {
+                int8_t v;
+                if (nvs_get_i8(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "i8\t%s\t%d\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_U16: {
+                uint16_t v;
+                if (nvs_get_u16(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "u16\t%s\t%u\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_I16: {
+                int16_t v;
+                if (nvs_get_i16(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "i16\t%s\t%d\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_U32: {
+                uint32_t v;
+                if (nvs_get_u32(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "u32\t%s\t%" PRIu32 "\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_I32: {
+                int32_t v;
+                if (nvs_get_i32(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "i32\t%s\t%" PRId32 "\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_U64: {
+                uint64_t v;
+                if (nvs_get_u64(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "u64\t%s\t%" PRIu64 "\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_I64: {
+                int64_t v;
+                if (nvs_get_i64(handle, info.key, &v) == ESP_OK) {
+                    snprintf(line, 512, "i64\t%s\t%" PRId64 "\n", info.key, v);
+                    httpd_resp_sendstr_chunk(req, line);
+                }
+                break;
+            }
+            case NVS_TYPE_STR: {
+                size_t sz = 0;
+                if (nvs_get_str(handle, info.key, NULL, &sz) == ESP_OK && sz > 0) {
+                    char *val = malloc(sz);
+                    char *hex = malloc(sz * 2);  // (sz-1)*2 hex chars + NUL
+                    atomic_fetch_add(&malloc_count_settings, 2);
+                    if (val && hex && nvs_get_str(handle, info.key, val, &sz) == ESP_OK) {
+                        hex_encode(hex, (const uint8_t *)val, sz - 1);
+                        httpd_resp_sendstr_chunk(req, "str\t");
+                        httpd_resp_sendstr_chunk(req, info.key);
+                        httpd_resp_sendstr_chunk(req, "\t");
+                        httpd_resp_sendstr_chunk(req, hex);
+                        httpd_resp_sendstr_chunk(req, "\n");
+                    }
+                    free(val);
+                    free(hex);
+                    atomic_fetch_add(&free_count_settings, 2);
+                }
+                break;
+            }
+            case NVS_TYPE_BLOB: {
+                size_t sz = 0;
+                if (nvs_get_blob(handle, info.key, NULL, &sz) == ESP_OK && sz > 0) {
+                    uint8_t *val = malloc(sz);
+                    char *hex = malloc(sz * 2 + 1);
+                    atomic_fetch_add(&malloc_count_settings, 2);
+                    if (val && hex && nvs_get_blob(handle, info.key, val, &sz) == ESP_OK) {
+                        hex_encode(hex, val, sz);
+                        httpd_resp_sendstr_chunk(req, "blob\t");
+                        httpd_resp_sendstr_chunk(req, info.key);
+                        httpd_resp_sendstr_chunk(req, "\t");
+                        httpd_resp_sendstr_chunk(req, hex);
+                        httpd_resp_sendstr_chunk(req, "\n");
+                    }
+                    free(val);
+                    free(hex);
+                    atomic_fetch_add(&free_count_settings, 2);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        err = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+    nvs_close(handle);
+    free(line);
+    atomic_fetch_add(&free_count_settings, 1);
+
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+// POST /settings/restore - request body is a backup file produced by
+// /settings/backup. Each recognised entry is written straight back into the
+// "settings" NVS namespace; the device reboots afterwards so settings_init()
+// re-reads everything. Entries are merged over the current config (keys not in
+// the file are left untouched), so restoring a full backup fully reproduces it
+// while a hand-trimmed file only touches the keys it lists.
+static esp_err_t settings_restore_post_handler(httpd_req_t *req) {
+    size_t content_len = req->content_len;
+    if (content_len == 0 || content_len > SETTINGS_RESTORE_MAX_BODY) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or oversized backup body");
+        return ESP_FAIL;
+    }
+
+    char *body = malloc(content_len + 1);
+    atomic_fetch_add(&malloc_count_settings, 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t received = 0;
+    while (received < content_len) {
+        int r = httpd_req_recv(req, body + received, content_len - received);
+        if (r <= 0) {
+            free(body);
+            atomic_fetch_add(&free_count_settings, 1);
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request timeout");
+            } else {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to read backup body");
+            }
+            return ESP_FAIL;
+        }
+        received += r;
+    }
+    body[content_len] = '\0';
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(SETTINGS_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        free(body);
+        atomic_fetch_add(&free_count_settings, 1);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open NVS");
+        return err;
+    }
+
+    int applied = 0, failed = 0, skipped = 0;
+    char *saveptr = NULL;
+    for (char *ln = strtok_r(body, "\n", &saveptr); ln != NULL;
+         ln = strtok_r(NULL, "\n", &saveptr)) {
+        size_t ll = strlen(ln);
+        if (ll > 0 && ln[ll - 1] == '\r') ln[--ll] = '\0';
+        if (ll == 0 || ln[0] == '#') continue;
+
+        char *tab1 = strchr(ln, '\t');
+        if (!tab1) { skipped++; continue; }
+        *tab1 = '\0';
+        char *key = tab1 + 1;
+        char *tab2 = strchr(key, '\t');
+        if (!tab2) { skipped++; continue; }
+        *tab2 = '\0';
+        char *payload = tab2 + 1;
+
+        nvs_type_t type = nvs_tag_to_type(ln);
+        size_t key_len = strlen(key);
+        if (type == NVS_TYPE_ANY || key_len == 0 || key_len > 15) {
+            skipped++;
+            continue;
+        }
+
+        esp_err_t werr;
+        switch (type) {
+            case NVS_TYPE_U8:  werr = nvs_set_u8(handle, key, (uint8_t)strtoul(payload, NULL, 10)); break;
+            case NVS_TYPE_I8:  werr = nvs_set_i8(handle, key, (int8_t)strtol(payload, NULL, 10)); break;
+            case NVS_TYPE_U16: werr = nvs_set_u16(handle, key, (uint16_t)strtoul(payload, NULL, 10)); break;
+            case NVS_TYPE_I16: werr = nvs_set_i16(handle, key, (int16_t)strtol(payload, NULL, 10)); break;
+            case NVS_TYPE_U32: werr = nvs_set_u32(handle, key, (uint32_t)strtoul(payload, NULL, 10)); break;
+            case NVS_TYPE_I32: werr = nvs_set_i32(handle, key, (int32_t)strtol(payload, NULL, 10)); break;
+            case NVS_TYPE_U64: werr = nvs_set_u64(handle, key, (uint64_t)strtoull(payload, NULL, 10)); break;
+            case NVS_TYPE_I64: werr = nvs_set_i64(handle, key, (int64_t)strtoll(payload, NULL, 10)); break;
+            case NVS_TYPE_STR: {
+                uint8_t *buf = malloc(strlen(payload) / 2 + 1);
+                atomic_fetch_add(&malloc_count_settings, 1);
+                if (!buf) { werr = ESP_ERR_NO_MEM; break; }
+                int n = hex_decode(buf, payload);
+                if (n < 0) {
+                    werr = ESP_ERR_INVALID_ARG;
+                } else {
+                    buf[n] = '\0';
+                    werr = nvs_set_str(handle, key, (char *)buf);
+                }
+                free(buf);
+                atomic_fetch_add(&free_count_settings, 1);
+                break;
+            }
+            case NVS_TYPE_BLOB: {
+                size_t hexlen = strlen(payload);
+                if (hexlen < 2) { werr = ESP_ERR_INVALID_ARG; break; }
+                uint8_t *buf = malloc(hexlen / 2);
+                atomic_fetch_add(&malloc_count_settings, 1);
+                if (!buf) { werr = ESP_ERR_NO_MEM; break; }
+                int n = hex_decode(buf, payload);
+                werr = (n <= 0) ? ESP_ERR_INVALID_ARG : nvs_set_blob(handle, key, buf, n);
+                free(buf);
+                atomic_fetch_add(&free_count_settings, 1);
+                break;
+            }
+            default:
+                werr = ESP_ERR_INVALID_ARG;
+                break;
+        }
+
+        if (werr == ESP_OK) {
+            applied++;
+        } else {
+            failed++;
+            ESP_LOGW(TAG, "Restore: failed to set '%s' (%s): %s", key, ln, esp_err_to_name(werr));
+        }
+    }
+
+    if (applied > 0) {
+        err = nvs_commit(handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Restore: nvs_commit failed: %s", esp_err_to_name(err));
+        }
+    }
+    nvs_close(handle);
+    free(body);
+    atomic_fetch_add(&free_count_settings, 1);
+
+    if (applied == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No valid settings entries found in backup file");
+        return ESP_FAIL;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+        "Restored %d setting(s); %d failed, %d skipped. Restarting...",
+        applied, failed, skipped);
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_send(req, msg, HTTPD_RESP_USE_STRLEN);
+
+    ESP_LOGI(TAG, "%s", msg);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 static esp_err_t settings_get_handler(httpd_req_t *req) {
     settings_t *settings = (settings_t *)req->user_ctx;
-    
+
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
@@ -152,7 +527,46 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         "</form>\n"
         "<form action='/reboot' method='POST' style='display: inline;'>\n"
         "<button type='submit' style='background: #ff9800;'>Reboot Device</button>\n"
-        "</form><br><br>\n");
+        "</form><br><br>\n"
+        "<div style='background: #f4f4f4; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>\n"
+        "<strong>Backup &amp; Restore</strong>\n"
+        "<p style='margin: 8px 0; color: #555; font-size: 13px;'>Download a text file of every stored setting, or upload one to restore it. The backup includes secrets (passwords, WiFi/MQTT credentials). Restoring merges the file over the current configuration and reboots the device.</p>\n"
+        "<a href='/settings/backup' class=\"button\">Download Settings Backup</a>\n"
+        "<div style='margin-top: 12px;'>\n"
+        "<input type='file' id='restoreFile' accept='.txt,text/plain' style='width: auto;'>\n"
+        "<button type='button' id='restoreBtn' style='background: #ff9800;'>Restore &amp; Reboot</button>\n"
+        "</div>\n"
+        "</div>\n"
+        "<script>\n"
+        "document.getElementById('restoreBtn').addEventListener('click', function() {\n"
+        "  var msg = document.getElementById('message');\n"
+        "  var f = document.getElementById('restoreFile').files[0];\n"
+        "  if (!f) {\n"
+        "    msg.className = 'message error'; msg.textContent = 'Choose a backup file first.'; msg.style.display = 'block';\n"
+        "    return;\n"
+        "  }\n"
+        "  if (!confirm('Restore settings from this file and reboot the device?')) return;\n"
+        "  var reader = new FileReader();\n"
+        "  reader.onload = function() {\n"
+        "    fetch('/settings/restore', {\n"
+        "      method: 'POST',\n"
+        "      headers: { 'Content-Type': 'text/plain' },\n"
+        "      body: reader.result\n"
+        "    })\n"
+        "      .then(function(r) { return r.text().then(function(t) { return { ok: r.ok, text: t }; }); })\n"
+        "      .then(function(res) {\n"
+        "        msg.className = 'message ' + (res.ok ? 'success' : 'error');\n"
+        "        msg.textContent = res.text;\n"
+        "        msg.style.display = 'block';\n"
+        "        window.scrollTo(0, 0);\n"
+        "      })\n"
+        "      .catch(function(e) {\n"
+        "        msg.className = 'message error'; msg.textContent = 'Network error: ' + e; msg.style.display = 'block';\n"
+        "      });\n"
+        "  };\n"
+        "  reader.readAsText(f);\n"
+        "});\n"
+        "</script>\n");
     
     // Display OTA status if available
     const char *ota_status = ota_get_last_status();
@@ -2216,6 +2630,20 @@ static httpd_uri_t settings_get_uri = {
     .user_ctx  = NULL  // Will be set during initialization
 };
 
+static httpd_uri_t settings_backup_get_uri = {
+    .uri       = "/settings/backup",
+    .method    = HTTP_GET,
+    .handler   = settings_backup_get_handler,
+    .user_ctx  = NULL  // Will be set during initialization
+};
+
+static httpd_uri_t settings_restore_post_uri = {
+    .uri       = "/settings/restore",
+    .method    = HTTP_POST,
+    .handler   = settings_restore_post_handler,
+    .user_ctx  = NULL  // Will be set during initialization
+};
+
 esp_err_t settings_init(settings_t *settings)
 {
     settings->update_url = NULL;
@@ -3249,6 +3677,8 @@ esp_err_t settings_init(settings_t *settings)
 esp_err_t settings_register(settings_t *settings, httpd_handle_t http_server) {
     settings_post_uri.user_ctx = settings;
     settings_get_uri.user_ctx = settings;
+    settings_backup_get_uri.user_ctx = settings;
+    settings_restore_post_uri.user_ctx = settings;
     esp_err_t err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_post_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering settings POST handler!", esp_err_to_name(err));
@@ -3257,6 +3687,16 @@ esp_err_t settings_register(settings_t *settings, httpd_handle_t http_server) {
     err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_get_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering settings GET handler!", esp_err_to_name(err));
+        return err;
+    }
+    err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_backup_get_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering settings backup handler!", esp_err_to_name(err));
+        return err;
+    }
+    err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &settings_restore_post_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering settings restore handler!", esp_err_to_name(err));
         return err;
     }
     err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &reboot_post_uri);
