@@ -1,0 +1,13 @@
+# Name,   Type, SubType, Offset,   Size, Flags
+# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+#
+# Same as the IDF stock "two OTA large" layout, plus a coredump partition so
+# CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH can capture the failing allocation and task
+# backtraces on an out-of-memory crash. 4MB flash: ota_0/ota_1 end at 0x368000,
+# leaving ~600K free after the 64K coredump partition.
+nvs,      data, nvs,     ,        0x6000,
+otadata,  data, ota,     ,        0x2000,
+phy_init, data, phy,     ,        0x1000,
+ota_0,    app,  ota_0,   ,        1700K,
+ota_1,    app,  ota_1,   ,        1700K,
+coredump, data, coredump,,        64K,

@@ -51,3 +51,11 @@ CONFIG_ENABLE_BTHOME=y
 # returns -0x7100 (MBEDTLS_ERR_SSL_BAD_INPUT_DATA) on the first image read.
 # The Bluedroid trims above are the safe part of that heap-reduction effort.
 # CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH is not set
+
+# Capture a coredump on an out-of-memory / panic crash (64K "coredump"
+# partition in partitions_m5stickcplus.csv). Best-effort forensics for the
+# TLS-handshake heap exhaustion; inert on a device still running the old
+# partition table until it is reflashed over serial.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y

@@ -9,3 +9,5 @@ otadata,  data, ota,     ,        0x2000,
 phy_init, data, phy,     ,        0x1000,
 ota_0,    app,  ota_0,   ,        1900K,
 ota_1,    app,  ota_1,   ,        1900K,
+# ota_1 ends at 0x3D6000; 64K coredump partition still leaves ~100K free in 4MB.
+coredump, data, coredump,,        64K,

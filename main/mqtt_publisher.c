@@ -478,7 +478,7 @@ esp_err_t mqtt_publish_status(void)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Published sensors to MQTT topic '%s' (msg_id=%d, size=%d)", 
+    ESP_LOGD(TAG, "Published sensors to MQTT topic '%s' (msg_id=%d, size=%d)",
              topic, msg_id, offset);
     
     xSemaphoreGive(json_mutex);
@@ -574,7 +574,7 @@ static esp_err_t mqtt_publish_single_sensor_now(int sensor_id)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Published sensor %d (%s) to MQTT topic '%s' (msg_id=%d, size=%d)",
+    ESP_LOGD(TAG, "Published sensor %d (%s) to MQTT topic '%s' (msg_id=%d, size=%d)",
              sensor_id, sensor->metric_name, topic, msg_id, offset);
 
     xSemaphoreGive(json_mutex);
