@@ -312,9 +312,10 @@ static httpd_uri_t ota_post_uri = {
 // True only on an OTA-mode boot; selects the "/" handler's behaviour.
 static bool ota_root_ota_mode = false;
 
-// GET "/" - intentionally unauthenticated.
+// GET "/" and GET "/ota" - intentionally unauthenticated.
 //
-// Normal boot: redirect to the dashboard (there is no other "/" handler).
+// Normal boot: redirect to /settings (on "/", the dashboard handler wins and
+// this never runs; on "/ota" it gives a GET something sane to do).
 // OTA boot: a self-reloading holding page. When the update finishes or fails
 // the device reboots into normal mode and the next 5s reload lands on
 // /settings, so a watching browser sees exactly when it is done.
@@ -358,6 +359,16 @@ static httpd_uri_t ota_root_uri = {
     .user_ctx  = NULL
 };
 
+// GET "/ota" - same holding page as "/" during an OTA-mode boot. "/ota" POST
+// (below) schedules the update; a browser that then navigates to /ota with a
+// GET should see the progress page, not a 404/405.
+static httpd_uri_t ota_progress_get_uri = {
+    .uri       = "/ota",
+    .method    = HTTP_GET,
+    .handler   = ota_root_get_handler,
+    .user_ctx  = NULL
+};
+
 
 esp_err_t ota_init(settings_t *settings, httpd_handle_t http_server, bool ota_mode)
 {
@@ -373,6 +384,12 @@ esp_err_t ota_init(settings_t *settings, httpd_handle_t http_server, bool ota_mo
     esp_err_t err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &ota_post_uri);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error (%s) registering OTA POST handler!", esp_err_to_name(err));
+        return err;
+    }
+
+    err = httpd_register_uri_handler(http_server, &ota_progress_get_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering \"/ota\" GET handler!", esp_err_to_name(err));
         return err;
     }
 
