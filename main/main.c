@@ -28,6 +28,9 @@
 #include "a02yyuw.h"
 #include "flow_sensor.h"
 #include "m5stick_display.h"
+#if CONFIG_BT_ENABLED
+#include "esp_bt.h"
+#endif
 
 bool g_ntp_initialized = false;
 
@@ -51,7 +54,17 @@ void app_main(void)
     
     // Check if OTA update is pending
     bool ota_mode = (ota_check_pending_update(settings) == ESP_OK);
-    
+
+#if CONFIG_BT_ENABLED
+    if (ota_mode) {
+        // An OTA-mode boot never touches Bluetooth (bthome_observer_init is
+        // skipped below). Hand the BT controller + Bluedroid BSS back to the
+        // heap so mbedtls/esp-tls has room for its large (~16KB) contiguous
+        // buffers during the firmware download.
+        esp_bt_mem_release(ESP_BT_MODE_BTDM);
+    }
+#endif
+
     wifi_init(settings);
     syslog_init(settings);  // Initialize syslog after WiFi
     
@@ -90,6 +103,11 @@ void app_main(void)
         flow_sensor_init(settings);
     }
     
-    ota_init(settings, http_server);
-    metrics_init(settings, http_server);
+    ota_init(settings, http_server, ota_mode);
+
+    // Prometheus scrapes would otherwise land mid-download, allocating a
+    // response buffer in competition with the OTA TLS session.
+    if (!ota_mode) {
+        metrics_init(settings, http_server);
+    }
 }

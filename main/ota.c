@@ -14,6 +14,8 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_heap_caps.h"
+#include <stdio.h>
 #include "string.h"
 #include "esp_crt_bundle.h"
 
@@ -185,13 +187,32 @@ static void ota_load_status(void)
 void ota_task(void *pvParameter)
 {
     settings_t *settings = (settings_t *)pvParameter;
-    ESP_LOGI(TAG, "Starting OTA example task");
+    ESP_LOGI(TAG, "Starting OTA task");
+
+    // Let the rest of the (already minimal) OTA-mode boot settle so the heap
+    // coalesces before we take the large contiguous buffers below.
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // esp_http_client's buffer_size has to hold the response header block in
+    // one pass; 4KB is marginal against a GitHub release's signed-CDN redirect
+    // headers. Size it to the heap actually available, but leave headroom for
+    // the mbedtls/esp-tls session (~16KB in + handshake) allocated right after.
+    size_t largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    int rx_buffer_size = 4096;
+    if (largest_free > 96 * 1024) {
+        rx_buffer_size = 16384;
+    } else if (largest_free > 64 * 1024) {
+        rx_buffer_size = 8192;
+    }
+    ESP_LOGI(TAG, "OTA HTTP rx buffer %d bytes (largest free block %u)",
+             rx_buffer_size, (unsigned)largest_free);
+
     esp_http_client_config_t config = {
         .url = settings->update_url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .event_handler = _http_event_handler,
         .keep_alive_enable = true,
-        .buffer_size = 4096,
+        .buffer_size = rx_buffer_size,
         .buffer_size_tx = 2048,
     };
 
@@ -288,20 +309,76 @@ static httpd_uri_t ota_post_uri = {
     .user_ctx  = NULL  // Will be set during initialization
 };
 
+// True only on an OTA-mode boot; selects the "/" handler's behaviour.
+static bool ota_root_ota_mode = false;
 
-esp_err_t ota_init(settings_t *settings, httpd_handle_t http_server)
+// GET "/" - intentionally unauthenticated.
+//
+// Normal boot: redirect to the dashboard (there is no other "/" handler).
+// OTA boot: a self-reloading holding page. When the update finishes or fails
+// the device reboots into normal mode and the next 5s reload lands on
+// /settings, so a watching browser sees exactly when it is done.
+static esp_err_t ota_root_get_handler(httpd_req_t *req)
+{
+    if (!ota_root_ota_mode) {
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", "/settings");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+
+    const char *status = ota_get_last_status();
+    char body[640];
+    int n = snprintf(body, sizeof(body),
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<meta http-equiv=\"refresh\" content=\"5\">"
+        "<title>Updating firmware</title></head>"
+        "<body style=\"font-family:system-ui,sans-serif;max-width:34rem;"
+        "margin:3rem auto;padding:0 1rem;line-height:1.5\">"
+        "<h1>Firmware update in progress</h1>"
+        "<p>This device is applying an over-the-air update. This page reloads "
+        "every 5&nbsp;seconds and returns to the dashboard once the device "
+        "restarts.</p>"
+        "<p><strong>Status:</strong> %s</p></body></html>",
+        (status && status[0]) ? status : "starting update...");
+    if (n < 0) {
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static httpd_uri_t ota_root_uri = {
+    .uri       = "/",
+    .method    = HTTP_GET,
+    .handler   = ota_root_get_handler,
+    .user_ctx  = NULL
+};
+
+
+esp_err_t ota_init(settings_t *settings, httpd_handle_t http_server, bool ota_mode)
 {
     ESP_LOGI(TAG, "OTA init start");
     ota_post_uri.user_ctx = settings;
     ota_settings = settings;
+    ota_root_ota_mode = ota_mode;
     get_sha256_of_partitions();
-    
+
     // Load last status from NVS
     ota_load_status();
-    
+
     esp_err_t err = httpd_register_uri_handler_with_basic_auth(settings, http_server, &ota_post_uri);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Error (%s) registering settings GET handler!", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Error (%s) registering OTA POST handler!", esp_err_to_name(err));
+        return err;
+    }
+
+    err = httpd_register_uri_handler(http_server, &ota_root_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) registering \"/\" handler!", esp_err_to_name(err));
         return err;
     }
     return ESP_OK;

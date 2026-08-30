@@ -282,9 +282,9 @@ httpd_handle_t http_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     // Keep in step with the number of routes registered across all modules
-    // (settings/sensors/pump/ezo_ph/ota/metrics/bthome). Registration fails
-    // silently past this limit, dropping whichever handlers register last.
-    config.max_uri_handlers = 24;
+    // (settings/sensors/pump/ezo_ph/ota + "/"/metrics/bthome). Registration
+    // fails silently past this limit, dropping whichever handlers register last.
+    config.max_uri_handlers = 26;
     config.max_open_sockets = 10;
     
     // Start the httpd server
