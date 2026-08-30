@@ -5,6 +5,8 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -40,6 +42,14 @@ atomic_uint_fast32_t free_count_mqtt_publisher = ATOMIC_VAR_INIT(0);
 // That totals ~620 bytes; round up with headroom.
 #define METRICS_CHUNK_BUF_SIZE 1024
 
+// The chunk buffer is allocated once in metrics_init() rather than per request:
+// scrapes are frequent and a repeated malloc/free of this block adds heap churn
+// under the memory pressure this device already runs close to. httpd can serve
+// /metrics from more than one worker task, so a mutex serializes the shared
+// buffer (a concurrent scrape waits, or gets 503 if the holder is slow).
+static char *metrics_buf = NULL;
+static SemaphoreHandle_t metrics_buf_mutex = NULL;
+
 // Formats into buf (capped at METRICS_CHUNK_BUF_SIZE) and sends it as one
 // HTTP chunk, so the overall response can grow with the sensor count without
 // needing a buffer sized for the whole response.
@@ -60,13 +70,17 @@ static esp_err_t metrics_emit(httpd_req_t *req, char *buf, const char *fmt, ...)
 static esp_err_t metrics_handler(httpd_req_t *req) {
     settings_t *settings = (settings_t *)req->user_ctx;
 
-    char *buf = malloc(METRICS_CHUNK_BUF_SIZE);
-    atomic_fetch_add(&malloc_count_metrics, 1);
-    if (buf == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate memory for metrics chunk buffer");
+    if (metrics_buf == NULL || metrics_buf_mutex == NULL) {
+        ESP_LOGE(TAG, "Metrics buffer not initialized");
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
+    if (xSemaphoreTake(metrics_buf_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        ESP_LOGW(TAG, "Timed out waiting for metrics buffer (concurrent scrape?)");
+        httpd_resp_send_custom_err(req, "503 Service Unavailable", "metrics busy");
+        return ESP_FAIL;
+    }
+    char *buf = metrics_buf;
 
     // Get uptime in seconds
     int64_t uptime_us = esp_timer_get_time();
@@ -306,8 +320,7 @@ static esp_err_t metrics_handler(httpd_req_t *req) {
     // Terminate the chunked response
     httpd_resp_send_chunk(req, NULL, 0);
 
-    free(buf);
-    atomic_fetch_add(&free_count_metrics, 1);
+    xSemaphoreGive(metrics_buf_mutex);
     return err;
 }
 
@@ -319,6 +332,13 @@ static httpd_uri_t metrics_uri = {
 };
 
 void metrics_init(settings_t *settings, httpd_handle_t server) {
+    metrics_buf_mutex = xSemaphoreCreateMutex();
+    metrics_buf = malloc(METRICS_CHUNK_BUF_SIZE);
+    atomic_fetch_add(&malloc_count_metrics, 1);
+    if (metrics_buf == NULL || metrics_buf_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate metrics chunk buffer / mutex");
+    }
+
     metrics_uri.user_ctx = settings;
     esp_err_t err = httpd_register_uri_handler_instrumented(server, &metrics_uri);
     if (err != ESP_OK) {

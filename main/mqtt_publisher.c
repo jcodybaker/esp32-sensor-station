@@ -4,6 +4,7 @@
 #include "metrics.h"
 #include "ha_discovery.h"
 #include <esp_log.h>
+#include <esp_system.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -19,6 +20,55 @@ static const char *TAG = "mqtt_publisher";
 
 #define MQTT_RECONNECT_MIN_DELAY_MS 1000
 #define MQTT_RECONNECT_MAX_DELAY_MS (30 * 60 * 1000) // 30 minutes
+
+// A TLS (mqtts) handshake allocates the ~16.6KB mbedtls input record buffer as
+// one contiguous block, plus the out buffer and RSA/ECC scratch. If the largest
+// free block is below this, a reconnect will just churn the heap and fail (seen
+// in the field as a multi-hour "PK verify 0x4290 / Error transport connect"
+// loop), so the reconnect timer re-checks on this cadence instead of retrying.
+#define MQTT_RECONNECT_MIN_LARGEST_BLOCK 20480
+#define MQTT_RECONNECT_HEAP_RETRY_MS     15000
+
+// Self-recovery watchdog: if the largest free block stays below this for
+// HEAP_WATCHDOG_SAMPLES consecutive status-task ticks (30s each), the heap is
+// wedged past the point where TLS can recover, so reboot. Suppressed for the
+// first few minutes so the known boot-time heap crunch can't trip it.
+#define HEAP_WATCHDOG_MIN_LARGEST_BLOCK 10240
+#define HEAP_WATCHDOG_SAMPLES           6
+#define HEAP_WATCHDOG_MIN_UPTIME_US     (5 * 60 * 1000000LL)
+
+static void mqtt_log_heap(const char *ctx)
+{
+    ESP_LOGW(TAG, "%s: heap free=%u min=%u largest=%u", ctx,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
+// Called every status-task tick. Reboots the device if the heap has been
+// unrecoverably fragmented/exhausted for HEAP_WATCHDOG_SAMPLES ticks running.
+static void mqtt_heap_watchdog_check(void)
+{
+    static int low_samples = 0;
+
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (largest >= HEAP_WATCHDOG_MIN_LARGEST_BLOCK ||
+        esp_timer_get_time() < HEAP_WATCHDOG_MIN_UPTIME_US) {
+        low_samples = 0;
+        return;
+    }
+
+    low_samples++;
+    ESP_LOGE(TAG, "Heap critically low: largest free block %u < %u (%d/%d), free=%u min=%u",
+             (unsigned)largest, HEAP_WATCHDOG_MIN_LARGEST_BLOCK, low_samples, HEAP_WATCHDOG_SAMPLES,
+             (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size());
+
+    if (low_samples >= HEAP_WATCHDOG_SAMPLES) {
+        ESP_LOGE(TAG, "Heap exhausted for %d consecutive samples; restarting to recover", low_samples);
+        vTaskDelay(pdMS_TO_TICKS(1000)); // give the log line a chance to reach syslog
+        esp_restart();
+    }
+}
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static settings_t *mqtt_settings = NULL;
@@ -47,7 +97,9 @@ static void mqtt_status_task(void *pvParameters)
     
     while (1) {
         vTaskDelay(delay);
-        
+
+        mqtt_heap_watchdog_check();
+
         if (mqtt_is_enabled()) {
             esp_err_t err = mqtt_publish_status();
             if (err != ESP_OK) {
@@ -65,10 +117,24 @@ static void mqtt_status_task(void *pvParameters)
 // network.disable_auto_reconnect=true in the client config.
 static void mqtt_reconnect_timer_callback(void *arg)
 {
-    if (mqtt_client != NULL) {
-        ESP_LOGI(TAG, "Attempting MQTT reconnect (backoff was %lu ms)", (unsigned long)mqtt_reconnect_delay_ms);
-        esp_mqtt_client_reconnect(mqtt_client);
+    if (mqtt_client == NULL) {
+        return;
     }
+
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (largest < MQTT_RECONNECT_MIN_LARGEST_BLOCK) {
+        ESP_LOGW(TAG, "Deferring MQTT reconnect: largest free block %u < %u; re-check in %d ms",
+                 (unsigned)largest, MQTT_RECONNECT_MIN_LARGEST_BLOCK, MQTT_RECONNECT_HEAP_RETRY_MS);
+        if (mqtt_reconnect_timer != NULL) {
+            esp_timer_start_once(mqtt_reconnect_timer,
+                                 (uint64_t)MQTT_RECONNECT_HEAP_RETRY_MS * 1000ULL);
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Attempting MQTT reconnect (backoff was %lu ms, largest free block %u)",
+             (unsigned long)mqtt_reconnect_delay_ms, (unsigned)largest);
+    esp_mqtt_client_reconnect(mqtt_client);
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
@@ -79,6 +145,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected to broker");
+            mqtt_log_heap("connected");
             mqtt_connected = true;
             mqtt_reconnect_delay_ms = MQTT_RECONNECT_MIN_DELAY_MS;
             ha_discovery_on_mqtt_connected();
@@ -105,6 +172,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT error occurred");
+            mqtt_log_heap("error");
             if (error_mutex != NULL && xSemaphoreTake(error_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                 if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
                     snprintf(last_error, sizeof(last_error), "TCP Transport error - errno: %d (%s)",
