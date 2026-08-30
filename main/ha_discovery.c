@@ -107,13 +107,24 @@ static void object_id_for_sensor(char *dst, size_t dst_size, const sensor_data_t
 
 // Maps a sensor's unit / metric_name to a Home Assistant device_class and
 // state_class. Returns the device_class (or NULL) and writes the state_class.
-static const char *classify(const sensor_data_t *sensor, const char **state_class_out) {
+// *unit_out is set to the unit string to advertise: HA silently drops a
+// discovery config whose unit_of_measurement is not valid for its device_class
+// (e.g. "ml" vs "mL", "C" vs "°C"), so classes that need it get a
+// normalized unit here; otherwise the sensor's raw unit is passed through.
+#define DEG "\xC2\xB0" // UTF-8 degree sign
+static const char *classify(const sensor_data_t *sensor, const char **state_class_out,
+                            const char **unit_out) {
     const char *unit = sensor->unit;
     const char *metric = sensor->metric_name;
     *state_class_out = "measurement";
+    *unit_out = unit;
 
-    if (strcmp(unit, "C") == 0 || strcmp(unit, "F") == 0 ||
-        strstr(unit, "\xC2\xB0") != NULL /* UTF-8 degree sign */) {
+    if (strcmp(unit, "C") == 0 || strcmp(unit, "c") == 0 || strcmp(unit, DEG "C") == 0) {
+        *unit_out = DEG "C";
+        return "temperature";
+    }
+    if (strcmp(unit, "F") == 0 || strcmp(unit, "f") == 0 || strcmp(unit, DEG "F") == 0) {
+        *unit_out = DEG "F";
         return "temperature";
     }
     if (strcmp(unit, "%") == 0) {
@@ -122,11 +133,20 @@ static const char *classify(const sensor_data_t *sensor, const char **state_clas
         return NULL;
     }
     if (strcmp(unit, "V") == 0) return "voltage";
-    if (strcmp(unit, "g") == 0 || strcmp(unit, "kg") == 0) return "weight";
-    if (strcmp(unit, "cm") == 0 || strcmp(unit, "mm") == 0 || strcmp(unit, "m") == 0) return "distance";
+    if (strcmp(unit, "g") == 0) return "weight";
+    if (strcmp(unit, "kg") == 0) return "weight";
+    if (strcmp(unit, "cm") == 0 || strcmp(unit, "mm") == 0 || strcmp(unit, "km") == 0) return "distance";
     if (strcmp(unit, "dBm") == 0) return "signal_strength";
-    if (strcmp(unit, "ml") == 0 || strcmp(unit, "mL") == 0) return "volume";
-    if (strcmp(unit, "L") == 0 || strcmp(unit, "gal") == 0) {
+    if (strcmp(unit, "ml") == 0 || strcmp(unit, "mL") == 0) {
+        *unit_out = "mL";
+        return "volume";
+    }
+    if (strcmp(unit, "L") == 0) {
+        *state_class_out = "total_increasing";
+        return "water";
+    }
+    if (strcmp(unit, "gal") == 0) {
+        *unit_out = "gal";
         *state_class_out = "total_increasing";
         return "water";
     }
@@ -166,7 +186,8 @@ static void publish_sensor_config(const sensor_data_t *sensor) {
     object_id_for_sensor(object_id, sizeof(object_id), sensor);
 
     const char *state_class = NULL;
-    const char *device_class = classify(sensor, &state_class);
+    const char *unit = NULL;
+    const char *device_class = classify(sensor, &state_class, &unit);
 
     char json[HA_JSON_BUF_SIZE];
     int n = 0;
@@ -174,8 +195,8 @@ static void publish_sensor_config(const sensor_data_t *sensor) {
                   "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s/state\","
                   "\"avty_t\":\"%s\"",
                   sensor->display_name, s_node, object_id, s_node, object_id, s_availability_topic);
-    if (sensor->unit[0] != '\0') {
-        n += snprintf(json + n, sizeof(json) - n, ",\"unit_of_meas\":\"%s\"", sensor->unit);
+    if (unit != NULL && unit[0] != '\0') {
+        n += snprintf(json + n, sizeof(json) - n, ",\"unit_of_meas\":\"%s\"", unit);
     }
     if (device_class != NULL) {
         n += snprintf(json + n, sizeof(json) - n, ",\"dev_cla\":\"%s\"", device_class);
@@ -396,7 +417,9 @@ void ha_discovery_publish_sensor_state(const sensor_data_t *sensor) {
     if (!ha_discovery_enabled() || sensor == NULL || sensor->metric_name[0] == '\0') {
         return;
     }
-    if (!sensor->available) {
+    // Only sensors that also get a discovery config (see publish_sensor_config);
+    // a display_name-less sensor like load_cell_raw is internal-only.
+    if (sensor->display_name[0] == '\0' || !sensor->available) {
         return;
     }
     char object_id[HA_OBJECT_ID_MAX];
