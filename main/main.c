@@ -56,11 +56,15 @@ void app_main(void)
     bool ota_mode = (ota_check_pending_update(settings) == ESP_OK);
 
 #if CONFIG_BT_ENABLED
-    if (ota_mode) {
-        // An OTA-mode boot never touches Bluetooth (bthome_observer_init is
-        // skipped below). Hand the BT controller + Bluedroid BSS back to the
-        // heap so mbedtls/esp-tls has room for its large (~16KB) contiguous
-        // buffers during the firmware download.
+    // Reclaim the BT controller + Bluedroid BSS (~40KB, much of it a single
+    // contiguous block) whenever Bluetooth won't be used this boot:
+    //   - an OTA-mode boot never touches BT (bthome_observer_init is skipped), and
+    //   - in normal mode BTHome is the only BT consumer, so a disabled BTHome
+    //     means nothing will init the controller.
+    // This gives mbedtls/esp-tls room for its large handshake allocations (the
+    // MQTT and syslog TLS sessions). Enabling BTHome sets restart_needed, so the
+    // next boot skips this branch and BT initialises normally.
+    if (ota_mode || !settings->bthome_enabled) {
         esp_bt_mem_release(ESP_BT_MODE_BTDM);
     }
 #endif
