@@ -309,10 +309,12 @@ esp_err_t mqtt_publisher_publish(const char *topic, const char *payload, int len
     if (mqtt_client == NULL || !mqtt_connected) {
         return ESP_FAIL;
     }
-    // Use enqueue rather than esp_mqtt_client_publish(): this is called from the
-    // MQTT event handler (HA discovery's connect/data hooks) where the blocking
-    // publish path can deadlock. enqueue is non-blocking and context-safe.
-    int msg_id = esp_mqtt_client_enqueue(mqtt_client, topic, payload, len, qos, retain ? 1 : 0, qos > 0);
+    // esp_mqtt_client_publish() rather than _enqueue(): _enqueue() with
+    // store=false silently drops the message in this esp-mqtt version, and a
+    // QoS-0 publish is documented safe to call from the MQTT event handler
+    // (which is where HA discovery's connect/data hooks run). All HA discovery
+    // traffic is QoS 0, so callers must not pass qos > 0 here.
+    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, payload, len, qos, retain ? 1 : 0);
     return msg_id < 0 ? ESP_FAIL : ESP_OK;
 }
 

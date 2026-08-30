@@ -324,7 +324,9 @@ void ha_discovery_on_mqtt_connected(void) {
         return;
     }
 
-    mqtt_publisher_publish(s_availability_topic, "online", 6, 1, true);
+    // QoS 0 (see mqtt_publisher_publish): the retained LWT paired with this is
+    // still QoS 1, configured on the client in mqtt_publisher_init().
+    mqtt_publisher_publish(s_availability_topic, "online", 6, 0, true);
 
     publish_all_sensor_configs();
 
