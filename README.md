@@ -12,6 +12,32 @@ This project provides a firmware image for esp32-based devices which can relay [
 * Over-the-air updates
 * Log to remote syslog server
 
+## Home Assistant
+
+The station can advertise itself to Home Assistant over MQTT using HA's native
+[MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+protocol — no YAML or custom component needed on the HA side.
+
+1. Point the station's MQTT settings at the same broker Home Assistant uses.
+2. In the settings page under **MQTT Configuration**, tick **Enable Home Assistant
+   MQTT Discovery** (optionally change the discovery prefix from `homeassistant`)
+   and save. The device reboots.
+
+A device named after the station's hostname then appears under
+*Settings → Devices & Services → Devices* with:
+
+* every local and BTHome sensor (BTHome sensors show as child devices),
+* diagnostic entities for WiFi RSSI, uptime and free heap,
+* a **Pump Dose** number (mL) and a **Dose Now** button, when a pump is configured.
+
+Availability is tracked with an MQTT Last Will, so entities go *unavailable* when
+the station drops off the network. Discovery runs alongside the existing custom
+`station/sensor` and `station/status` messages, which are unchanged.
+
+Disabling discovery later stops all publishing, but the retained
+`<prefix>/.../config` topics already sent to the broker must be cleared manually
+(e.g. delete the device in Home Assistant).
+
 ## Links
 * [BTHome](https://bthome.io)
 * [ESP-IDF HX711 Driver](https://components.espressif.com/components/esp-idf-lib/hx711/versions/1.0.6/readme?language=en)
@@ -61,5 +87,4 @@ For BTHome sensors I've been using Shelly's:
 ![Weight Hardware Bottom View](docs/assets/hw-weight3.png)
 
 ## TODO
-* Publish to MQTT
 * BTHome Encryption Support

@@ -2,6 +2,7 @@
 #include "sensors.h"
 #include "wifi.h"
 #include "metrics.h"
+#include "ha_discovery.h"
 #include <esp_log.h>
 #include <string.h>
 #include <stdio.h>
@@ -52,6 +53,10 @@ static void mqtt_status_task(void *pvParameters)
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "Failed to publish status: %s", esp_err_to_name(err));
             }
+            if (ha_discovery_enabled()) {
+                ha_discovery_publish_diagnostics();
+                ha_discovery_periodic();
+            }
         }
     }
 }
@@ -76,6 +81,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "MQTT connected to broker");
             mqtt_connected = true;
             mqtt_reconnect_delay_ms = MQTT_RECONNECT_MIN_DELAY_MS;
+            ha_discovery_on_mqtt_connected();
+            break;
+
+        case MQTT_EVENT_DATA:
+            ha_discovery_on_mqtt_data(event->topic, event->topic_len,
+                                     event->data, event->data_len);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
@@ -210,7 +221,18 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
         .broker.address.uri = settings->mqtt_broker_url,
         .network.disable_auto_reconnect = true,
     };
-    
+
+    // Home Assistant discovery: register a retained Last Will so HA marks every
+    // entity unavailable when the station drops off. The matching "online"
+    // birth message is published from ha_discovery_on_mqtt_connected().
+    if (ha_discovery_enabled()) {
+        mqtt_cfg.session.last_will.topic = ha_discovery_availability_topic();
+        mqtt_cfg.session.last_will.msg = "offline";
+        mqtt_cfg.session.last_will.msg_len = 7;
+        mqtt_cfg.session.last_will.qos = 1;
+        mqtt_cfg.session.last_will.retain = true;
+    }
+
     // Check if using mqtts:// and enable TLS verification
     if (strncmp(settings->mqtt_broker_url, "mqtts://", 8) == 0) {
         mqtt_cfg.broker.verification.skip_cert_common_name_check = false;
@@ -280,6 +302,27 @@ esp_err_t mqtt_publisher_init(settings_t *settings)
 bool mqtt_is_enabled(void)
 {
     return mqtt_client != NULL && mqtt_connected;
+}
+
+esp_err_t mqtt_publisher_publish(const char *topic, const char *payload, int len, int qos, bool retain)
+{
+    if (mqtt_client == NULL || !mqtt_connected) {
+        return ESP_FAIL;
+    }
+    // Use enqueue rather than esp_mqtt_client_publish(): this is called from the
+    // MQTT event handler (HA discovery's connect/data hooks) where the blocking
+    // publish path can deadlock. enqueue is non-blocking and context-safe.
+    int msg_id = esp_mqtt_client_enqueue(mqtt_client, topic, payload, len, qos, retain ? 1 : 0, qos > 0);
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
+}
+
+esp_err_t mqtt_publisher_subscribe(const char *topic, int qos)
+{
+    if (mqtt_client == NULL) {
+        return ESP_FAIL;
+    }
+    int msg_id = esp_mqtt_client_subscribe(mqtt_client, topic, qos);
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
 }
 
 const char* mqtt_get_last_error(void)
@@ -461,10 +504,17 @@ static esp_err_t mqtt_publish_single_sensor_now(int sensor_id)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Published sensor %d (%s) to MQTT topic '%s' (msg_id=%d, size=%d)", 
+    ESP_LOGI(TAG, "Published sensor %d (%s) to MQTT topic '%s' (msg_id=%d, size=%d)",
              sensor_id, sensor->metric_name, topic, msg_id, offset);
-    
+
     xSemaphoreGive(json_mutex);
+
+    // Mirror the value to the Home Assistant discovery state topic (its own
+    // per-entity topic, published alongside the legacy JSON above).
+    if (ha_discovery_enabled()) {
+        ha_discovery_publish_sensor_state(sensor);
+    }
+
     return ESP_OK;
 }
 

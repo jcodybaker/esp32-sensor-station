@@ -48,6 +48,33 @@ bool mqtt_is_enabled(void);
 const char* mqtt_get_last_error(void);
 
 /**
+ * @brief Publish a raw payload to an arbitrary topic
+ *
+ * Thin wrapper over esp_mqtt_client_publish() used by the Home Assistant
+ * discovery module. No-op returning ESP_FAIL if MQTT is not connected.
+ *
+ * @param topic   Topic string
+ * @param payload Payload bytes (copied into the client outbox)
+ * @param len     Payload length
+ * @param qos     MQTT QoS (0-2)
+ * @param retain  Whether to set the retain flag
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t mqtt_publisher_publish(const char *topic, const char *payload, int len, int qos, bool retain);
+
+/**
+ * @brief Subscribe to a topic
+ *
+ * Thin wrapper over esp_mqtt_client_subscribe(). No-op returning ESP_FAIL if the
+ * MQTT client has not been initialized.
+ *
+ * @param topic Topic filter
+ * @param qos   Requested QoS
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t mqtt_publisher_subscribe(const char *topic, int qos);
+
+/**
  * @brief Disconnect and cleanup MQTT client
  */
 void mqtt_publisher_cleanup(void);

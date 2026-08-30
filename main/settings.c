@@ -746,6 +746,24 @@ static esp_err_t settings_get_handler(httpd_req_t *req) {
         settings->mqtt_debounce_seconds);
     httpd_resp_sendstr_chunk(req, buffer);
 
+    // Send Home Assistant discovery enable checkbox
+    snprintf(buffer, 1024,
+        "<label for='ha_discovery_enabled'>\n"
+        "<input type='checkbox' id='ha_discovery_enabled' name='ha_discovery_enabled' value='1'%s> Enable Home Assistant MQTT Discovery (requires restart)\n"
+        "</label>\n",
+        settings->ha_discovery_enabled ? " checked" : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+
+    // Send ha_discovery_prefix with current value
+    char *encoded_ha_prefix = url_encode(settings->ha_discovery_prefix);
+    snprintf(buffer, 1024,
+        "<label for='ha_discovery_prefix'>Home Assistant Discovery Prefix:</label>\n"
+        "<input type='text' id='ha_discovery_prefix' name='ha_discovery_prefix' value='%s' placeholder='homeassistant'>\n",
+        encoded_ha_prefix ? encoded_ha_prefix : "");
+    httpd_resp_sendstr_chunk(req, buffer);
+    free(encoded_ha_prefix);
+    atomic_fetch_add(&free_count_settings, 1);
+
 #if CONFIG_ENABLE_M5STICKC_DISPLAY
     // Send lcd_brightness with current value
     snprintf(buffer, 1024,
@@ -1843,6 +1861,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
                               "bthome_enabled", "bthome_en", &settings->bthome_enabled,
                               true, &updated, &restart_needed);
 
+    settings_update_checkbox(settings_handle, query_buf, is_full_form_submit,
+                              "ha_discovery_enabled", "ha_disc_en", &settings->ha_discovery_enabled,
+                              true, &updated, &restart_needed);
+
     if (httpd_query_key_value(query_buf, "wifi_ssid", param_buf, sizeof(param_buf)) == ESP_OK) {
         url_decode(decoded_param, param_buf);  // Decode URL encoding
         if (strcmp(decoded_param, settings->wifi_ssid) == 0) {
@@ -2104,6 +2126,35 @@ static esp_err_t settings_post_handler(httpd_req_t *req) {
             }
         } else {
             ESP_LOGI(TAG, "MQTT status topic unchanged");
+        }
+    }
+
+    // Check and update ha_discovery_prefix
+    if (httpd_query_key_value(query_buf, "ha_discovery_prefix", param_buf, sizeof(param_buf)) == ESP_OK) {
+        url_decode(decoded_param, param_buf);
+        bool should_update = false;
+        if (settings->ha_discovery_prefix == NULL || strlen(settings->ha_discovery_prefix) == 0) {
+            should_update = (strlen(decoded_param) > 0);
+        } else {
+            should_update = (strcmp(decoded_param, settings->ha_discovery_prefix) != 0);
+        }
+
+        if (should_update) {
+            err = nvs_set_str(settings_handle, "ha_disc_pfx", decoded_param);
+            if (err == ESP_OK) {
+                if (settings->ha_discovery_prefix != NULL) {
+                    free(settings->ha_discovery_prefix);
+                    atomic_fetch_add(&free_count_settings, 1);
+                }
+                settings->ha_discovery_prefix = strdup(decoded_param);
+                updated = true;
+                restart_needed = true;
+                ESP_LOGI(TAG, "Updated ha_discovery_prefix to %s", decoded_param);
+            } else {
+                ESP_LOGE(TAG, "Failed to write ha_discovery_prefix to NVS: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGI(TAG, "Home Assistant discovery prefix unchanged");
         }
     }
 
@@ -2686,6 +2737,8 @@ esp_err_t settings_init(settings_t *settings)
     settings->mqtt_topic = NULL;
     settings->mqtt_status_topic = NULL;
     settings->mqtt_debounce_seconds = 10;  // Default 10 second per-sensor publish interval
+    settings->ha_discovery_enabled = false;
+    settings->ha_discovery_prefix = NULL;  // Populated by the NVS read (default "homeassistant")
 #if CONFIG_ENABLE_M5STICKC_DISPLAY
     settings->lcd_brightness = CONFIG_M5STICKC_DISPLAY_DEFAULT_BRIGHTNESS;
 #else
@@ -3631,6 +3684,49 @@ esp_err_t settings_init(settings_t *settings)
             break;
         default:
             ESP_LOGE(TAG, "Error (%s) reading mqtt_status_topic!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'ha_discovery_enabled' from NVS...");
+    uint8_t ha_discovery_enabled_value;
+    err = nvs_get_u8(settings_handle, "ha_disc_en", &ha_discovery_enabled_value);
+    switch (err) {
+        case ESP_OK:
+            settings->ha_discovery_enabled = ha_discovery_enabled_value != 0;
+            ESP_LOGI(TAG, "Read 'ha_discovery_enabled' = %d", settings->ha_discovery_enabled);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->ha_discovery_enabled = false;  // Disabled by default
+            ESP_LOGI(TAG, "No value for 'ha_discovery_enabled'; using default = %d (disabled)", settings->ha_discovery_enabled);
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading ha_discovery_enabled!", esp_err_to_name(err));
+            return err;
+    }
+
+    ESP_LOGI(TAG, "Reading 'ha_discovery_prefix' from NVS...");
+    err = nvs_get_str(settings_handle, "ha_disc_pfx", NULL, &str_size);
+    switch (err) {
+        case ESP_OK:
+            settings->ha_discovery_prefix = malloc(str_size);
+            atomic_fetch_add(&malloc_count_settings, 1);
+            if (settings->ha_discovery_prefix == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for ha_discovery_prefix");
+                return ESP_ERR_NO_MEM;
+            }
+            err = nvs_get_str(settings_handle, "ha_disc_pfx", settings->ha_discovery_prefix, &str_size);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Error (%s) reading ha_discovery_prefix!", esp_err_to_name(err));
+                return err;
+            }
+            ESP_LOGI(TAG, "Read 'ha_discovery_prefix' = '%s'", settings->ha_discovery_prefix);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            settings->ha_discovery_prefix = strdup("homeassistant");
+            ESP_LOGI(TAG, "No value for 'ha_discovery_prefix'; using default = 'homeassistant'");
+            break;
+        default:
+            ESP_LOGE(TAG, "Error (%s) reading ha_discovery_prefix!", esp_err_to_name(err));
             return err;
     }
 

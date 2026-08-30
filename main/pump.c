@@ -2,12 +2,14 @@
 #include "http_server.h"
 #include "sensors.h"
 #include "metrics.h"
+#include "ha_discovery.h"
 #include <esp_log.h>
 #include <stdlib.h>
 #include <string.h>
 #include "driver/i2c_master.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 
 #define PUMP_BUFFER_SIZE 41
 #define PUMP_PROCESSING_DELAY 300 // milliseconds
@@ -38,6 +40,7 @@ typedef struct {
     SemaphoreHandle_t xSemaphore;
     int voltage_sensor_id;
     int total_volume_sensor_id;
+    QueueHandle_t cmd_queue;   // dispense requests (ml) from async callers e.g. Home Assistant
 } pump_context_t;
 
 // Shared I2C bus for Atlas Scientific EZO circuits. Atlas EZO devices (pump,
@@ -70,6 +73,40 @@ static esp_err_t pump_ensure_i2c_bus(settings_t *settings) {
 }
 
 char* pump_send_cmd(pump_context_t *pump_ctx, const char *cmd);
+
+// Home Assistant "Pump Dose" number: store the requested volume (RAM only; the
+// web form remains the source of truth for the NVS-persisted default) and echo
+// it back as the entity's state.
+static void pump_ha_set_dose_cb(const char *payload, int len, void *ctx) {
+    (void)len;
+    pump_context_t *p = (pump_context_t *)ctx;
+    int ml = atoi(payload);
+    if (ml < 1) ml = 1;
+    if (ml > 1000) ml = 1000;
+    p->settings->pump_dispense_ml = (int16_t)ml;
+
+    char state[8];
+    snprintf(state, sizeof(state), "%d", ml);
+    ha_discovery_publish_command_state("pump_dose", state);
+    ESP_LOGI(TAG, "HA set pump dose to %d ml", ml);
+}
+
+// Home Assistant "Dose Now" button: hand the request to pump_monitor_task rather
+// than dispensing inline, since this runs on the MQTT event task and
+// pump_send_cmd() can block for a while on the pump I2C mutex.
+static void pump_ha_dose_now_cb(const char *payload, int len, void *ctx) {
+    (void)payload;
+    (void)len;
+    pump_context_t *p = (pump_context_t *)ctx;
+    int ml = p->settings->pump_dispense_ml;
+    if (ml < 1) ml = 1;
+
+    if (p->cmd_queue == NULL || xQueueSend(p->cmd_queue, &ml, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "HA dose-now dropped (queue full or missing)");
+    } else {
+        ESP_LOGI(TAG, "HA dose-now queued: %d ml", ml);
+    }
+}
 
 static esp_err_t pump_dispense_ml_param_parser(httpd_req_t *req, int *out_amount) {
     // Get the query string
@@ -182,8 +219,26 @@ static void pump_monitor_task(void *arg) {
             sensors_update(pump_ctx->total_volume_sensor_id, 0.0f, false);
         }
         
-        // Wait 10 seconds before next update
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        // Wait ~10 seconds before the next reading. Block on the command queue
+        // for that interval so a queued dispense request (e.g. the Home
+        // Assistant "Dose Now" button) is serviced here, on this task, rather
+        // than inline on the caller's context where pump_send_cmd() could
+        // block on the pump I2C mutex.
+        int req_ml;
+        if (pump_ctx->cmd_queue != NULL &&
+            xQueueReceive(pump_ctx->cmd_queue, &req_ml, pdMS_TO_TICKS(10000)) == pdTRUE) {
+            if (req_ml < 1) req_ml = 1;
+            if (req_ml > 1000) req_ml = 1000;
+            char cmd[16];
+            snprintf(cmd, sizeof(cmd), "D,%d", req_ml);
+            ESP_LOGI(TAG, "Dispensing %d ml (queued request)", req_ml);
+            const char *resp = pump_send_cmd(pump_ctx, cmd);
+            if (resp == NULL) {
+                ESP_LOGE(TAG, "Queued dispense failed: %s", pump_get_last_error());
+            }
+        } else if (pump_ctx->cmd_queue == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
     }
 }
 
@@ -441,6 +496,7 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
         return;
     }
     pump_ctx->settings = settings;
+    pump_ctx->cmd_queue = NULL;
     memset(pump_ctx->buf, 0, PUMP_BUFFER_SIZE);
 
     esp_err_t err = pump_ensure_i2c_bus(settings);
@@ -470,6 +526,16 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     pump_ctx->xSemaphore = xSemaphoreCreateMutex();
     if (pump_ctx->xSemaphore == NULL) {
         PUMP_ERROR_RETURN("Failed to create semaphore for pump");
+        i2c_master_bus_rm_device(pump_ctx->dev_handle);
+        free(pump_ctx);
+        atomic_fetch_add(&free_count_pump, 1);
+        return;
+    }
+
+    pump_ctx->cmd_queue = xQueueCreate(4, sizeof(int));
+    if (pump_ctx->cmd_queue == NULL) {
+        PUMP_ERROR_RETURN("Failed to create pump command queue");
+        vSemaphoreDelete(pump_ctx->xSemaphore);
         i2c_master_bus_rm_device(pump_ctx->dev_handle);
         free(pump_ctx);
         atomic_fetch_add(&free_count_pump, 1);
@@ -548,7 +614,23 @@ void pump_init(settings_t *settings, httpd_handle_t server) {
     } else {
         ESP_LOGI(TAG, "Registered pump calibration handlers");
     }
-    
+
+    // Expose the pump to Home Assistant as a "Pump Dose" number (mL) plus a
+    // "Dose Now" button. Configs are (re)published and the set topics
+    // (re)subscribed from ha_discovery_on_mqtt_connected().
+    if (ha_discovery_enabled()) {
+        char initial_dose[8];
+        snprintf(initial_dose, sizeof(initial_dose), "%d", pump_ctx->settings->pump_dispense_ml);
+        ha_discovery_register_command_entity(
+            "pump_dose", "number",
+            "\"min\":1,\"max\":1000,\"step\":1,\"unit_of_meas\":\"mL\",\"mode\":\"box\"",
+            initial_dose, pump_ha_set_dose_cb, pump_ctx);
+        ha_discovery_register_command_entity(
+            "pump_dose_now", "button",
+            "\"payload_press\":\"PRESS\"",
+            NULL, pump_ha_dose_now_cb, pump_ctx);
+    }
+
     return;
 }
 

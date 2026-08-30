@@ -15,6 +15,7 @@
 #include "http_server.h"
 #include "metrics.h"
 #include "mqtt_publisher.h"
+#include "ha_discovery.h"
 #include <esp_log.h>
 #include "bthome_observer.h"
 #include "weight.h"
@@ -56,6 +57,7 @@ void app_main(void)
     
     // Only initialize MQTT and sensors if NOT in OTA mode
     if (!ota_mode) {
+        ha_discovery_init(settings);    // Compute HA node id / availability topic before MQTT LWT setup
         mqtt_publisher_init(settings);  // Initialize MQTT client after WiFi
     }
     
