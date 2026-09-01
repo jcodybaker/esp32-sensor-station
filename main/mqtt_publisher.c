@@ -491,6 +491,20 @@ static esp_err_t mqtt_publish_single_sensor_now(int sensor_id)
         return ESP_FAIL;
     }
 
+    // A sensor with no Prometheus metric name is not part of the legacy
+    // station/sensor JSON feed, but a display-only reading (e.g. a Fahrenheit
+    // temperature whose Celsius shadow carries the metric) can still be a Home
+    // Assistant entity -- mirror its state to the discovery topic and stop.
+    {
+        const sensor_data_t *sensor = sensors_get_by_index(sensor_id);
+        if (sensor != NULL && sensor->metric_name[0] == '\0') {
+            if (ha_discovery_enabled()) {
+                ha_discovery_publish_sensor_state(sensor);
+            }
+            return ESP_OK;
+        }
+    }
+
     // Get default topic if not configured
     const char *topic = mqtt_settings->mqtt_topic;
     if (!topic || strlen(topic) == 0) {

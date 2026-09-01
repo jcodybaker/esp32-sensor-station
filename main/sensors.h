@@ -25,6 +25,11 @@ typedef struct {
     double value;
     time_t last_updated;
     bool available;
+    // External sensors (BTHome beacons) belong to a device that is not this
+    // station and may be observed by several stations at once. Home Assistant
+    // discovery gives them a station-independent identity so the fleet reports
+    // one HA device instead of one per observer. See sensors_register_external().
+    bool external;
     char link_url[64];      // Optional action link URL
     char link_text[32];     // Optional action link text
 } sensor_data_t;
@@ -51,7 +56,25 @@ int sensors_register(
     const char *display_name,
     const char *unit,
     const char *metric_name,
-    const char *device_name, 
+    const char *device_name,
+    const char *device_id);
+
+/**
+ * @brief Register a sensor that belongs to an external device (e.g. a BTHome
+ *        beacon relayed over BLE).
+ *
+ * Identical to sensors_register() except the sensor is flagged as external, so
+ * Home Assistant discovery keys its entity/device on the beacon identity rather
+ * than on this station. Several stations observing the same beacon then converge
+ * on a single HA device instead of creating one per observer.
+ *
+ * @return int Sensor ID (index) if successful, -1 if registration failed
+ */
+int sensors_register_external(
+    const char *display_name,
+    const char *unit,
+    const char *metric_name,
+    const char *device_name,
     const char *device_id);
 
 /**

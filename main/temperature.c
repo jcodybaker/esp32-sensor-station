@@ -165,8 +165,13 @@ void init_ds18b20(settings_t *settings) {
                          (uint8_t)(address >> 16), (uint8_t)(address >> 8), (uint8_t)(address >> 0));
                 
                 if (settings->temp_use_fahrenheit) {
+                    // Fahrenheit reading is the Home Assistant entity; it needs
+                    // the device_name/device_id so discovery can build a stable
+                    // per-probe object_id (its metric_name is deliberately
+                    // blank -- Prometheus gets Celsius from the shadow below).
                     ds18b20s[ds18b20_device_num].sensor_id_f = sensors_register(
-                        "Temperature", unit, NULL, NULL, NULL);
+                        "Temperature", unit, NULL,
+                        device_name ? device_name : addr_str, addr_str);
                     ds18b20s[ds18b20_device_num].sensor_id_c = sensors_register(
                         NULL, NULL, "temperature", device_name ? device_name : addr_str, addr_str);
                 } else {

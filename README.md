@@ -26,17 +26,29 @@ protocol — no YAML or custom component needed on the HA side.
 A device named after the station's hostname then appears under
 *Settings → Devices & Services → Devices* with:
 
-* every local and BTHome sensor (BTHome sensors show as child devices),
+* every local sensor (DS18B20 probes and flow meters show as child devices),
 * diagnostic entities for WiFi RSSI, uptime and free heap,
 * a **Pump Dose** number (mL) and a **Dose Now** button, when a pump is configured.
 
-Availability is tracked with an MQTT Last Will, so entities go *unavailable* when
-the station drops off the network. Discovery runs alongside the existing custom
-`station/sensor` and `station/status` messages, which are unchanged.
+BTHome beacons get a **separate** Home Assistant device keyed on the beacon
+itself (`bthome_<mac>`), not on the reporting station, so several stations that
+hear the same beacon converge on one device instead of one per station. Whichever
+station last heard the beacon supplies the value; the entity goes *unavailable*
+if no station reports for 15 minutes (`expire_after`). Temperatures follow the
+station's °C/°F preference — in Fahrenheit mode Home Assistant shows the °F
+value while Prometheus keeps exporting °C.
+
+Local-sensor availability is tracked with an MQTT Last Will, so those entities go
+*unavailable* when the station drops off the network. Discovery runs alongside
+the existing custom `station/sensor` and `station/status` messages, which are
+unchanged.
 
 Disabling discovery later stops all publishing, but the retained
 `<prefix>/.../config` topics already sent to the broker must be cleared manually
-(e.g. delete the device in Home Assistant).
+(e.g. delete the device in Home Assistant). **Upgrading from a build before the
+`bthome_<mac>` change** also leaves the old per-station BTHome configs retained
+at `<prefix>/sensor/<hostname>/…`; delete those stale devices in Home Assistant
+(or clear the retained topics) so the beacon isn't listed twice.
 
 ## Links
 * [BTHome](https://bthome.io)

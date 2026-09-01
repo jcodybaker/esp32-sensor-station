@@ -284,12 +284,13 @@ static httpd_uri_t version_uri = {
     .user_ctx  = NULL
 };
 
-int sensors_register(
+static int sensors_register_common(
     const char *display_name,
     const char *unit,
     const char *metric_name,
-    const char *device_name, 
-    const char *device_id) {
+    const char *device_name,
+    const char *device_id,
+    bool external) {
     if (sensors_mutex != NULL) {
         xSemaphoreTake(sensors_mutex, portMAX_DELAY);
     }
@@ -344,15 +345,35 @@ int sensors_register(
     sensors[id].value = 0.0;
     sensors[id].last_updated = 0;
     sensors[id].available = false;
+    sensors[id].external = external;
     sensors[id].link_url[0] = '\0';
     sensors[id].link_text[0] = '\0';
-    
-    ESP_LOGI(TAG, "Registered sensor %d: '%s' (%s) [metric: %s]", id, sensors[id].display_name, sensors[id].unit, sensors[id].metric_name);
-    
+
+    ESP_LOGI(TAG, "Registered sensor %d: '%s' (%s) [metric: %s]%s", id, sensors[id].display_name,
+             sensors[id].unit, sensors[id].metric_name, external ? " [external]" : "");
+
     if (sensors_mutex != NULL) {
         xSemaphoreGive(sensors_mutex);
     }
     return id;
+}
+
+int sensors_register(
+    const char *display_name,
+    const char *unit,
+    const char *metric_name,
+    const char *device_name,
+    const char *device_id) {
+    return sensors_register_common(display_name, unit, metric_name, device_name, device_id, false);
+}
+
+int sensors_register_external(
+    const char *display_name,
+    const char *unit,
+    const char *metric_name,
+    const char *device_name,
+    const char *device_id) {
+    return sensors_register_common(display_name, unit, metric_name, device_name, device_id, true);
 }
 
 bool sensors_update(int sensor_id, double value, bool available) {

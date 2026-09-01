@@ -90,20 +90,38 @@ static const char *ha_prefix(void) {
     return "homeassistant";
 }
 
-// object_id = "<metric_name>" or "<metric_name>_<device_id>" (both sanitized),
-// the latter for BTHome sensors that share a metric_name across devices.
+// object_id = "<base>" or "<base>_<device_id>" (both sanitized), the latter for
+// sensors that share a base across devices (BTHome beacons, DS18B20 probes).
+// base is the metric_name when set, otherwise the display_name -- a
+// display-only reading (e.g. a Fahrenheit temperature whose Celsius shadow
+// carries the Prometheus metric) still needs a stable topic/uniq_id.
 static void object_id_for_sensor(char *dst, size_t dst_size, const sensor_data_t *sensor) {
-    // sanitize() is length-preserving, so these mirror the source field sizes.
-    char metric[SENSOR_DISPLAY_NAME_MAX_LEN];
-    sanitize(metric, sizeof(metric), sensor->metric_name);
+    // sanitize() is length-preserving, so this mirrors the source field size.
+    char base[SENSOR_DISPLAY_NAME_MAX_LEN];
+    sanitize(base, sizeof(base),
+             sensor->metric_name[0] != '\0' ? sensor->metric_name : sensor->display_name);
     if (sensor->device_id[0] != '\0') {
         char dev[SENSOR_DEVICE_ID_MAX_LEN];
         sanitize(dev, sizeof(dev), sensor->device_id);
-        snprintf(dst, dst_size, "%s_%s", metric, dev);
+        snprintf(dst, dst_size, "%s_%s", base, dev);
     } else {
-        snprintf(dst, dst_size, "%s", metric);
+        snprintf(dst, dst_size, "%s", base);
     }
 }
+
+// Discovery node segment / uniq_id + topic prefix for a sensor. Station-owned
+// sensors are namespaced under the station's node so two stations never collide;
+// external sensors (BTHome beacons) use a fixed "bthome" namespace plus the
+// beacon's device_id, so every station that hears the same beacon publishes the
+// identical retained config and state topic and Home Assistant sees one device.
+static const char *entity_ns(const sensor_data_t *sensor) {
+    return (sensor != NULL && sensor->external) ? "bthome" : s_node;
+}
+
+// Home Assistant marks an external sensor's entity unavailable if no station
+// reports a fresh value within this many seconds (matches the sensor registry's
+// stale timeout with headroom). Station-owned entities use the MQTT LWT instead.
+#define HA_EXTERNAL_EXPIRE_AFTER_S 900
 
 // Maps a sensor's unit / metric_name to a Home Assistant device_class and
 // state_class. Returns the device_class (or NULL) and writes the state_class.
@@ -153,23 +171,29 @@ static const char *classify(const sensor_data_t *sensor, const char **state_clas
     return NULL;
 }
 
-static esp_err_t ha_publish_config(const char *component, const char *object_id,
-                                   const char *json, int json_len) {
+static esp_err_t ha_publish_config(const char *component, const char *node,
+                                   const char *object_id, const char *json, int json_len) {
     char topic[HA_TOPIC_BUF_SIZE];
-    snprintf(topic, sizeof(topic), "%s/%s/%s/%s/config", ha_prefix(), component, s_node, object_id);
+    snprintf(topic, sizeof(topic), "%s/%s/%s/%s/config", ha_prefix(), component, node, object_id);
     // QoS 0: these are retained and republished on every connect, and a burst of
     // ~20 of them at QoS 1 would sit in the MQTT outbox awaiting PUBACK.
     return mqtt_publisher_publish(topic, json, json_len, 0, true);
 }
 
-// Appends the "dev" object. BTHome sensors (device_id set) get their own child
-// device linked to the station via "via_device"; everything else attaches to
-// the station device directly.
+// Appends the "dev" object. External sensors (BTHome beacons) get a
+// station-independent device keyed on the beacon id, so multiple observing
+// stations converge on one Home Assistant device. Other sensors with a
+// device_id (DS18B20 probes, flow meters) get their own child device linked to
+// the station via "via_device"; everything else attaches to the station device.
 static int append_device_block(char *buf, int offset, int size, const sensor_data_t *sensor) {
     if (sensor != NULL && sensor->device_id[0] != '\0') {
         char dev[SENSOR_DEVICE_ID_MAX_LEN * 2];
         sanitize(dev, sizeof(dev), sensor->device_id);
         const char *name = sensor->device_name[0] != '\0' ? sensor->device_name : sensor->device_id;
+        if (sensor->external) {
+            return snprintf(buf + offset, size - offset,
+                            "\"dev\":{\"ids\":[\"bthome_%s\"],\"name\":\"%s\"}", dev, name);
+        }
         return snprintf(buf + offset, size - offset,
                         "\"dev\":{\"ids\":[\"%s_%s\"],\"name\":\"%s\",\"via_device\":\"%s\"}",
                         s_node, dev, name, s_node);
@@ -188,13 +212,18 @@ static void publish_sensor_config(const sensor_data_t *sensor) {
     const char *state_class = NULL;
     const char *unit = NULL;
     const char *device_class = classify(sensor, &state_class, &unit);
+    const char *ns = entity_ns(sensor);
 
     char json[HA_JSON_BUF_SIZE];
     int n = 0;
     n += snprintf(json + n, sizeof(json) - n,
-                  "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s/state\","
-                  "\"avty_t\":\"%s\"",
-                  sensor->display_name, s_node, object_id, s_node, object_id, s_availability_topic);
+                  "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s/state\"",
+                  sensor->display_name, ns, object_id, ns, object_id);
+    if (sensor->external) {
+        n += snprintf(json + n, sizeof(json) - n, ",\"exp_aft\":%d", HA_EXTERNAL_EXPIRE_AFTER_S);
+    } else {
+        n += snprintf(json + n, sizeof(json) - n, ",\"avty_t\":\"%s\"", s_availability_topic);
+    }
     if (unit != NULL && unit[0] != '\0') {
         n += snprintf(json + n, sizeof(json) - n, ",\"unit_of_meas\":\"%s\"", unit);
     }
@@ -209,7 +238,7 @@ static void publish_sensor_config(const sensor_data_t *sensor) {
         ESP_LOGW(TAG, "sensor '%s' config truncated, skipping", sensor->metric_name);
         return;
     }
-    ha_publish_config("sensor", object_id, json, n);
+    ha_publish_config("sensor", entity_ns(sensor), object_id, json, n);
 }
 
 // A fixed diagnostic sensor attached to the station device.
@@ -230,7 +259,7 @@ static void publish_diag_config(const char *object_id, const char *name,
     n += snprintf(json + n, sizeof(json) - n, ",");
     n += append_device_block(json, n, sizeof(json), NULL);
     n += snprintf(json + n, sizeof(json) - n, "}");
-    ha_publish_config("sensor", object_id, json, n);
+    ha_publish_config("sensor", s_node, object_id, json, n);
 }
 
 static void publish_cmd_config(const ha_cmd_entity_t *e) {
@@ -254,7 +283,7 @@ static void publish_cmd_config(const ha_cmd_entity_t *e) {
         ESP_LOGW(TAG, "command entity '%s' config truncated, skipping", e->object_id);
         return;
     }
-    ha_publish_config(e->component, e->object_id, json, n);
+    ha_publish_config(e->component, s_node, e->object_id, json, n);
 }
 
 // Publishes config + subscribes the set topic + (re)publishes stored state for
@@ -277,7 +306,12 @@ static void publish_all_sensor_configs(void) {
     int count = sensors_get_count();
     for (int i = 0; i < count; i++) {
         const sensor_data_t *sensor = sensors_get_by_index(i);
-        if (sensor == NULL || sensor->metric_name[0] == '\0' || sensor->display_name[0] == '\0') {
+        // Needs a display_name to be a Home Assistant entity, plus something to
+        // build a stable object_id from: a metric_name, or a device_id (the
+        // case for a display-only Fahrenheit reading whose Celsius shadow holds
+        // the Prometheus metric).
+        if (sensor == NULL || sensor->display_name[0] == '\0' ||
+            (sensor->metric_name[0] == '\0' && sensor->device_id[0] == '\0')) {
             continue;
         }
         publish_sensor_config(sensor);
@@ -414,19 +448,21 @@ void ha_discovery_on_mqtt_data(const char *topic, int topic_len,
 }
 
 void ha_discovery_publish_sensor_state(const sensor_data_t *sensor) {
-    if (!ha_discovery_enabled() || sensor == NULL || sensor->metric_name[0] == '\0') {
+    if (!ha_discovery_enabled() || sensor == NULL) {
         return;
     }
-    // Only sensors that also get a discovery config (see publish_sensor_config);
-    // a display_name-less sensor like load_cell_raw is internal-only.
-    if (sensor->display_name[0] == '\0' || !sensor->available) {
+    // Mirror the publish_all_sensor_configs() filter: only sensors that also get
+    // a discovery config. A display_name-less sensor like load_cell_raw or a
+    // Celsius Prometheus shadow is internal-only.
+    if (sensor->display_name[0] == '\0' || !sensor->available ||
+        (sensor->metric_name[0] == '\0' && sensor->device_id[0] == '\0')) {
         return;
     }
     char object_id[HA_OBJECT_ID_MAX];
     object_id_for_sensor(object_id, sizeof(object_id), sensor);
 
     char topic[HA_TOPIC_BUF_SIZE];
-    snprintf(topic, sizeof(topic), "%s/%s/state", s_node, object_id);
+    snprintf(topic, sizeof(topic), "%s/%s/state", entity_ns(sensor), object_id);
 
     char value[24];
     int len = snprintf(value, sizeof(value), "%.4g", sensor->value);

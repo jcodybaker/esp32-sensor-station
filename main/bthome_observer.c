@@ -23,6 +23,16 @@ extern bool g_ntp_initialized;
 
 #define BTHOME_SENSOR_TEMPERATURE_F 0xF1  // Custom ID for Fahrenheit temperature
 
+// True for the BTHome object IDs we convert to Fahrenheit when temp_use_fahrenheit
+// is set. Keep in sync with the conversion in bthome_packet_callback().
+static bool bthome_object_is_temperature(uint8_t object_id) {
+    return object_id == BTHOME_SENSOR_TEMPERATURE ||
+           object_id == BTHOME_SENSOR_TEMPERATURE_SINT16_1 ||
+           object_id == BTHOME_SENSOR_TEMPERATURE_SINT8 ||
+           object_id == BTHOME_SENSOR_TEMPERATURE_SINT8_035 ||
+           object_id == BTHOME_SENSOR_DEWPOINT;
+}
+
 // BTHome sensor mapping for integration with sensor system
 typedef struct {
     esp_bd_addr_t addr;
@@ -430,9 +440,20 @@ static int find_or_register_bthome_sensor(esp_bd_addr_t addr, uint8_t object_id)
     snprintf(addr_str, sizeof(addr_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
-    // Register with sensor system
-    int sensor_id = sensors_register(
-        sensor_name, // Don't set a display name for the C value if temp_use_fahrenheit is true
+    // In Fahrenheit mode the native (Celsius) temperature object is kept only as
+    // a Prometheus shadow -- the BTHOME_SENSOR_TEMPERATURE_F pseudo-sensor
+    // carries the Home Assistant / web entity. Registering it without a display
+    // name stops HA from showing both a C and an F entity for one beacon.
+    const char *reg_display_name = sensor_name;
+    if (g_settings != NULL && g_settings->temp_use_fahrenheit &&
+        bthome_object_is_temperature(object_id)) {
+        reg_display_name = NULL;
+    }
+
+    // External: identity is the beacon, not this station, so several stations
+    // observing the same beacon converge on one Home Assistant device.
+    int sensor_id = sensors_register_external(
+        reg_display_name,
         unit ? unit : "",
         metric_name,
         device_name[0] != '\0' ? device_name : addr_str,
@@ -482,11 +503,7 @@ static void bthome_packet_callback(esp_bd_addr_t addr, int rssi,
         float value = bthome_get_scaled_value(m, factor);
         
         // Convert temperature to Fahrenheit if configured
-        bool is_temperature = (m->object_id == BTHOME_SENSOR_TEMPERATURE ||
-                              m->object_id == BTHOME_SENSOR_TEMPERATURE_SINT16_1 ||
-                              m->object_id == BTHOME_SENSOR_TEMPERATURE_SINT8 ||
-                              m->object_id == BTHOME_SENSOR_TEMPERATURE_SINT8_035 ||
-                              m->object_id == BTHOME_SENSOR_DEWPOINT);
+        bool is_temperature = bthome_object_is_temperature(m->object_id);
         if (is_temperature && g_settings && g_settings->temp_use_fahrenheit) {
             float f_value = value * 9.0f / 5.0f + 32.0f;
             // Find or register this sensor (only if MAC and object_id are enabled in settings)
