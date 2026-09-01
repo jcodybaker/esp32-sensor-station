@@ -182,21 +182,17 @@ static esp_err_t ha_publish_config(const char *component, const char *node,
 
 // Appends the "dev" object. External sensors (BTHome beacons) get a
 // station-independent device keyed on the beacon id, so multiple observing
-// stations converge on one Home Assistant device. Other sensors with a
-// device_id (DS18B20 probes, flow meters) get their own child device linked to
-// the station via "via_device"; everything else attaches to the station device.
+// stations converge on one Home Assistant device. Every other sensor -- local
+// readings including DS18B20 probes and flow meters, which carry a device_id
+// only to disambiguate their object_id -- attaches directly to the station
+// device so all of a station's entities sit together.
 static int append_device_block(char *buf, int offset, int size, const sensor_data_t *sensor) {
-    if (sensor != NULL && sensor->device_id[0] != '\0') {
+    if (sensor != NULL && sensor->external && sensor->device_id[0] != '\0') {
         char dev[SENSOR_DEVICE_ID_MAX_LEN * 2];
         sanitize(dev, sizeof(dev), sensor->device_id);
         const char *name = sensor->device_name[0] != '\0' ? sensor->device_name : sensor->device_id;
-        if (sensor->external) {
-            return snprintf(buf + offset, size - offset,
-                            "\"dev\":{\"ids\":[\"bthome_%s\"],\"name\":\"%s\"}", dev, name);
-        }
         return snprintf(buf + offset, size - offset,
-                        "\"dev\":{\"ids\":[\"%s_%s\"],\"name\":\"%s\",\"via_device\":\"%s\"}",
-                        s_node, dev, name, s_node);
+                        "\"dev\":{\"ids\":[\"bthome_%s\"],\"name\":\"%s\"}", dev, name);
     }
     const char *hostname = (s_settings != NULL && s_settings->hostname != NULL && s_settings->hostname[0] != '\0')
                                ? s_settings->hostname : s_node;

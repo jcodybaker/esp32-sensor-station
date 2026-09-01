@@ -26,7 +26,8 @@ protocol — no YAML or custom component needed on the HA side.
 A device named after the station's hostname then appears under
 *Settings → Devices & Services → Devices* with:
 
-* every local sensor (DS18B20 probes and flow meters show as child devices),
+* every local sensor, including DS18B20 probes and flow meters, as entities on
+  the station device itself,
 * diagnostic entities for WiFi RSSI, uptime and free heap,
 * a **Pump Dose** number (mL) and a **Dose Now** button, when a pump is configured.
 
